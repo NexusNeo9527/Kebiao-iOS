@@ -1,0 +1,21 @@
+{
+  "project": "Kebiao",
+  "platform": "ios",
+  "github": {
+    "owner": "NexusNeo9527",
+    "repo": "Kebiao-iOS"
+  },
+  "provider": "github",
+  "codemagic": {},
+  "bitrise": {},
+  "ios": {
+    "path": ".",
+    "scheme": "Kebiao"
+  },
+  "flutter": {
+    "watch": {}
+  },
+  "reactNative": {},
+  "kmp": {},
+  "mobai": {}
+}
