@@ -52,6 +52,9 @@ struct ReminderSettingsView: View {
         Task {
             if enabled {
                 let granted = await ReminderScheduler.shared.requestAuthorizationAndReschedule(courses: store.courses)
+                if granted {
+                    await LiveActivityCoordinator.refresh(courses: store.courses)
+                }
                 await MainActor.run {
                     remindersEnabled = granted
                     statusMessage = granted ? "提醒已开启。" : "通知权限未开启，请到系统设置中允许通知。"

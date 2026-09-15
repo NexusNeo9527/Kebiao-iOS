@@ -6,9 +6,24 @@ enum LiveActivityCoordinator {
         guard UserDefaults.standard.bool(forKey: ReminderPreferences.enabledKey),
               ActivityAuthorizationInfo().areActivitiesEnabled,
               let occurrence = ScheduleEngine.currentOrUpcomingOccurrence(in: courses, at: now),
-              let leadTime = occurrence.course.reminderMinutesBefore,
-              now >= occurrence.startDate.addingTimeInterval(Double(-leadTime * 60)),
-              now < occurrence.endDate else {
+              let leadTime = occurrence.course.reminderMinutesBefore else {
+            await endAll()
+            return
+        }
+
+        let activityStart = occurrence.startDate.addingTimeInterval(Double(-leadTime * 60))
+        if now < activityStart {
+#if compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                await schedule(occurrence, at: activityStart)
+                return
+            }
+#endif
+            await endAll()
+            return
+        }
+
+        guard now < occurrence.endDate else {
             await endAll()
             return
         }
@@ -60,6 +75,47 @@ enum LiveActivityCoordinator {
         )
         _ = try? Activity.request(attributes: attributes, content: content, pushType: nil)
     }
+
+#if compiler(>=6.2)
+    @available(iOS 26.0, *)
+    private static func schedule(_ occurrence: CourseOccurrence, at activityStart: Date) async {
+        if Activity<ClassActivityAttributes>.activities.contains(where: {
+            $0.attributes.courseID == occurrence.course.id && $0.attributes.startDate == occurrence.startDate
+        }) {
+            return
+        }
+
+        await endAll()
+        let course = occurrence.course
+        let attributes = ClassActivityAttributes(
+            courseID: course.id,
+            courseName: course.name,
+            teacher: course.teacher,
+            location: course.location,
+            startSection: course.startSection,
+            endSection: course.endSection,
+            startDate: occurrence.startDate,
+            endDate: occurrence.endDate
+        )
+        let content = ActivityContent(
+            state: ClassActivityAttributes.ContentState(updatedAt: .now),
+            staleDate: occurrence.endDate
+        )
+        let alert = AlertConfiguration(
+            title: "即将上课",
+            body: "课前提醒已开始，请查看课程安排。",
+            sound: .default
+        )
+        _ = try? Activity.request(
+            attributes: attributes,
+            content: content,
+            pushType: nil,
+            style: .standard,
+            alertConfiguration: alert,
+            start: activityStart
+        )
+    }
+#endif
 }
 
 enum LiveActivityError: LocalizedError {
