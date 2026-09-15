@@ -5,5 +5,6 @@ import WidgetKit
 struct KebiaoWidgetBundle: WidgetBundle {
     var body: some Widget {
         KebiaoTodayWidget()
+        KebiaoClassLiveActivity()
     }
 }

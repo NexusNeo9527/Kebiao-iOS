@@ -21,6 +21,17 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Run unit tests
+        run: >-
+          xcodebuild
+          -project Kebiao.xcodeproj
+          -scheme Kebiao
+          -sdk iphonesimulator
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest'
+          -derivedDataPath build/DerivedData
+          CODE_SIGNING_ALLOWED=NO
+          test
+
       - name: Build for iOS Simulator
         run: >-
           xcodebuild

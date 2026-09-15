@@ -4,18 +4,17 @@ import WidgetKit
 
 @Observable
 final class TimetableStore {
-    static let appGroup = "group.com.example.kebiao"
-    private let storageKey = "kebiao.courses.v1"
     private let defaults: UserDefaults
     var courses: [Course] = [] {
         didSet { save() }
     }
 
     init() {
-        defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
-        guard let data = defaults.data(forKey: storageKey),
+        defaults = UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier) ?? .standard
+        guard let data = defaults.data(forKey: KebiaoConfiguration.storageKey),
               let saved = try? JSONDecoder().decode([Course].self, from: data) else {
             courses = Course.samples
+            persist()
             return
         }
         courses = saved
@@ -27,10 +26,12 @@ final class TimetableStore {
     }
 
     func save(_ course: Course) {
-        if let index = courses.firstIndex(where: { $0.id == course.id }) {
-            courses[index] = course
+        var normalized = course
+        normalized.normalize()
+        if let index = courses.firstIndex(where: { $0.id == normalized.id }) {
+            courses[index] = normalized
         } else {
-            courses.append(course)
+            courses.append(normalized)
         }
     }
 
@@ -39,8 +40,17 @@ final class TimetableStore {
     }
 
     private func save() {
+        persist()
+        let snapshot = courses
+        Task {
+            await ReminderScheduler.shared.reschedule(courses: snapshot)
+            await LiveActivityCoordinator.refresh(courses: snapshot)
+        }
+    }
+
+    private func persist() {
         guard let data = try? JSONEncoder().encode(courses) else { return }
-        defaults.set(data, forKey: storageKey)
-        WidgetCenter.shared.reloadTimelines(ofKind: "KebiaoTodayWidget")
+        defaults.set(data, forKey: KebiaoConfiguration.storageKey)
+        WidgetCenter.shared.reloadTimelines(ofKind: KebiaoConfiguration.widgetKind)
     }
 }

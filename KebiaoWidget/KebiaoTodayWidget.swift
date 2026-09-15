@@ -23,16 +23,16 @@ struct TodayProvider: TimelineProvider {
     }
 
     private func entry(for date: Date) -> TodayEntry {
-        let defaults = UserDefaults(suiteName: "group.com.example.kebiao") ?? .standard
-        let courses = defaults.data(forKey: "kebiao.courses.v1")
+        let defaults = UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier) ?? .standard
+        let courses = defaults.data(forKey: KebiaoConfiguration.storageKey)
             .flatMap { try? JSONDecoder().decode([Course].self, from: $0) } ?? []
-        let weekday = Weekday(rawValue: Calendar.current.component(.weekday, from: date)) ?? .monday
+        let weekday = Weekday.from(calendarWeekday: Calendar.current.component(.weekday, from: date))
         return TodayEntry(date: date, courses: courses.filter { $0.weekdays.contains(weekday) }.sorted { $0.startSection < $1.startSection })
     }
 }
 
 struct KebiaoTodayWidget: Widget {
-    let kind = "KebiaoTodayWidget"
+    let kind = KebiaoConfiguration.widgetKind
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: TodayProvider()) { entry in
@@ -90,6 +90,6 @@ private struct TodayWidgetView: View {
                 Spacer(minLength: 0)
             }
         }
-        .widgetURL(URL(string: "kebiao://schedule"))
+        .widgetURL(KebiaoConfiguration.scheduleURL)
     }
 }

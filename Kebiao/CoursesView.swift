@@ -3,8 +3,7 @@ import UIKit
 
 struct CoursesView: View {
     let store: TimetableStore
-    @State private var sheet: Course?
-    @State private var isCreating = false
+    @State private var presentedSheet: CourseSheet?
 
     var body: some View {
         List {
@@ -12,12 +11,12 @@ struct CoursesView: View {
                 ContentUnavailableView("还没有课程", systemImage: "books.vertical", description: Text("点右上角添加第一门课程。"))
             } else {
                 ForEach(store.courses.sorted { $0.name < $1.name }) { course in
-                    Button { sheet = course } label: {
+                    Button { presentedSheet = .edit(course) } label: {
                         HStack(spacing: 12) {
                             Circle().fill(course.color).frame(width: 12, height: 12)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(course.name).foregroundStyle(.primary)
-                                Text("\(course.weekdays.map(\.shortName).sorted().joined(separator: "、")) · 第\(course.startSection)节")
+                                Text("\(course.weekdays.sorted { $0.weekIndex < $1.weekIndex }.map(\.shortName).joined(separator: "、")) · 第\(course.startSection)节")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -35,15 +34,17 @@ struct CoursesView: View {
         .navigationTitle("课程")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { isCreating = true } label: { Image(systemName: "plus") }
+                Button { presentedSheet = .create } label: { Image(systemName: "plus") }
                     .accessibilityLabel("添加课程")
             }
         }
-        .sheet(item: $sheet) { course in
-            CourseEditorView(course: course, store: store)
-        }
-        .sheet(isPresented: $isCreating) {
-            CourseEditorView(course: nil, store: store)
+        .sheet(item: $presentedSheet) { destination in
+            switch destination {
+            case .create:
+                CourseEditorView(course: nil, store: store)
+            case .edit(let course):
+                CourseEditorView(course: course, store: store)
+            }
         }
     }
 }
@@ -57,7 +58,7 @@ struct CourseEditorView: View {
     init(course: Course?, store: TimetableStore) {
         self.course = course
         self.store = store
-        _draft = State(initialValue: course ?? Course(name: "", teacher: "", location: "", startSection: 1, sectionCount: 2, weekdays: [.monday], colorValue: 0x5477D9))
+        _draft = State(initialValue: course ?? Course(name: "", teacher: "", location: "", startSection: 1, sectionCount: 2, weekdays: [.monday], colorValue: 0x5477D9, startTimeMinutes: nil, reminderMinutesBefore: 10))
     }
 
     var body: some View {
@@ -70,7 +71,15 @@ struct CourseEditorView: View {
                 }
                 Section("时间") {
                     Stepper("第 \(draft.startSection) 节开始", value: $draft.startSection, in: 1...12)
-                    Stepper("连续 \(draft.sectionCount) 节", value: $draft.sectionCount, in: 1...4)
+                        .onChange(of: draft.startSection) { _, _ in
+                            draft.sectionCount = min(draft.sectionCount, 13 - draft.startSection)
+                        }
+                    Stepper("连续 \(draft.sectionCount) 节", value: $draft.sectionCount, in: 1...min(4, 13 - draft.startSection))
+                    DatePicker("开始时间", selection: startTime, displayedComponents: .hourAndMinute)
+                    Toggle("上课前提醒", isOn: reminderEnabled)
+                    if draft.reminderMinutesBefore != nil {
+                        Stepper("提前 \(draft.reminderMinutesBefore ?? 10) 分钟", value: reminderLeadTime, in: 1...120)
+                    }
                     ForEach(Weekday.allCases) { day in
                         Toggle(day.fullName, isOn: Binding(
                             get: { draft.weekdays.contains(day) },
@@ -97,6 +106,42 @@ struct CourseEditorView: View {
                         .disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
+        }
+    }
+
+    private var startTime: Binding<Date> {
+        Binding {
+            Calendar.current.date(byAdding: .minute, value: draft.resolvedStartTimeMinutes, to: Calendar.current.startOfDay(for: .now)) ?? .now
+        } set: { date in
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+            draft.startTimeMinutes = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        }
+    }
+
+    private var reminderEnabled: Binding<Bool> {
+        Binding {
+            draft.reminderMinutesBefore != nil
+        } set: { enabled in
+            draft.reminderMinutesBefore = enabled ? (draft.reminderMinutesBefore ?? 10) : nil
+        }
+    }
+
+    private var reminderLeadTime: Binding<Int> {
+        Binding(
+            get: { draft.reminderMinutesBefore ?? 10 },
+            set: { draft.reminderMinutesBefore = $0 }
+        )
+    }
+}
+
+private enum CourseSheet: Identifiable {
+    case create
+    case edit(Course)
+
+    var id: String {
+        switch self {
+        case .create: "create"
+        case .edit(let course): course.id.uuidString
         }
     }
 }

@@ -75,9 +75,7 @@ struct ScheduleView: View {
 
     private func dayNumber(for day: Weekday) -> Int {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: .now)
-        let offset = (day.rawValue - calendar.component(.weekday, from: today) + 7) % 7
-        return calendar.component(.day, from: calendar.date(byAdding: .day, value: offset, to: today) ?? today)
+        return calendar.component(.day, from: ScheduleEngine.date(for: day, inWeekContaining: .now, calendar: calendar))
     }
 }
 
@@ -86,7 +84,7 @@ private struct CourseCard: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            Text("\(course.startSection)\n—\n\(course.startSection + course.sectionCount - 1)")
+            Text("\(course.startSection)\n—\n\(course.endSection)")
                 .font(.caption.weight(.bold))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(course.color)
