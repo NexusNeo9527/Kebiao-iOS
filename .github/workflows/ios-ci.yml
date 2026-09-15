@@ -1,0 +1,41 @@
+name: iOS CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build iOS app and widget
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build for iOS Simulator
+        run: >-
+          xcodebuild
+          -project Kebiao.xcodeproj
+          -scheme Kebiao
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath build/DerivedData
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kebiao-simulator-app
+          path: build/DerivedData/Build/Products/Debug-iphonesimulator/Kebiao.app
+          if-no-files-found: error
+          retention-days: 7
