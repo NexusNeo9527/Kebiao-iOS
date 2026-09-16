@@ -2,108 +2,314 @@ import SwiftUI
 
 struct ScheduleView: View {
     let store: TimetableStore
-    @State private var selectedDay = Weekday.today
+    @State private var weekAnchor = Date.now
+    @State private var selectedCourse: Course?
 
-    private var dayCourses: [Course] { store.courses(on: selectedDay) }
+    private let timeColumnWidth: CGFloat = 46
+    private let sectionHeight: CGFloat = 76
+
+    private var calendar: Calendar { .current }
+    private var sectionCount: Int {
+        max(10, store.courses.map(\.endSection).max() ?? 10)
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                dayPicker
-                schedule
-            }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 32)
+        VStack(spacing: 0) {
+            header
+            weekdayHeader
+            timetable
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(Color(red: 0.91, green: 0.95, blue: 1.0).ignoresSafeArea())
         .navigationBarHidden(true)
+        .sheet(item: $selectedCourse) { course in
+            CourseDetailSheet(course: course)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("我的课表")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-            Text(todayText)
-                .font(.subheadline)
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("第 \(weekNumber) 周")
+                    .font(.title2.weight(.bold))
+                Text(weekRangeText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            HStack(spacing: 6) {
+                headerButton(systemImage: "chevron.left", accessibilityLabel: "上一周") {
+                    moveWeek(by: -1)
+                }
+                Button("今天") {
+                    withAnimation(.snappy) { weekAnchor = .now }
+                }
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                headerButton(systemImage: "chevron.right", accessibilityLabel: "下一周") {
+                    moveWeek(by: 1)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+    }
+
+    private var weekdayHeader: some View {
+        HStack(spacing: 0) {
+            Text("节")
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-        }
-        .padding(.top, 20)
-    }
+                .frame(width: timeColumnWidth)
 
-    private var dayPicker: some View {
-        HStack(spacing: 8) {
             ForEach(Weekday.allCases) { day in
+                let date = day.date(inWeekContaining: weekAnchor, calendar: calendar)
+                VStack(spacing: 3) {
+                    Text(day.shortName.replacingOccurrences(of: "周", with: ""))
+                        .font(.caption.weight(.semibold))
+                    Text(date, format: .dateTime.day())
+                        .font(.subheadline.weight(isToday(date) ? .bold : .regular))
+                        .frame(width: 28, height: 28)
+                        .background(isToday(date) ? Color.primary : .clear, in: Circle())
+                        .foregroundStyle(isToday(date) ? .white : .secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(day.fullName)，\(calendar.component(.day, from: date))日")
+            }
+        }
+        .padding(.bottom, 8)
+    }
+
+    private var timetable: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            GeometryReader { geometry in
+                let dayWidth = (geometry.size.width - timeColumnWidth) / CGFloat(Weekday.allCases.count)
+
+                ZStack(alignment: .topLeading) {
+                    gridLines(dayWidth: dayWidth)
+                    sectionLabels
+                    courseBlocks(dayWidth: dayWidth)
+                }
+                .frame(height: CGFloat(sectionCount) * sectionHeight)
+            }
+            .frame(height: CGFloat(sectionCount) * sectionHeight)
+            .padding(.bottom, 24)
+        }
+    }
+
+    private func gridLines(dayWidth: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(0...sectionCount, id: \.self) { row in
+                Rectangle()
+                    .fill(Color.primary.opacity(0.08))
+                    .frame(width: dayWidth * CGFloat(Weekday.allCases.count), height: 0.5)
+                    .offset(x: timeColumnWidth, y: CGFloat(row) * sectionHeight)
+            }
+
+            ForEach(0...Weekday.allCases.count, id: \.self) { column in
+                Rectangle()
+                    .fill(Color.primary.opacity(0.06))
+                    .frame(width: 0.5, height: CGFloat(sectionCount) * sectionHeight)
+                    .offset(x: timeColumnWidth + CGFloat(column) * dayWidth)
+            }
+        }
+    }
+
+    private var sectionLabels: some View {
+        VStack(spacing: 0) {
+            ForEach(1...sectionCount, id: \.self) { section in
+                VStack(spacing: 3) {
+                    Text("\(section)")
+                        .font(.headline)
+                    Text(timeText(for: section))
+                        .font(.system(size: 9, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 6)
+                .frame(width: timeColumnWidth, height: sectionHeight, alignment: .top)
+            }
+        }
+    }
+
+    private func courseBlocks(dayWidth: CGFloat) -> some View {
+        ForEach(store.courses) { course in
+            ForEach(course.weekdays.sorted(by: { $0.weekIndex < $1.weekIndex })) { day in
                 Button {
-                    selectedDay = day
+                    selectedCourse = course
                 } label: {
-                    VStack(spacing: 4) {
-                        Text(day.shortName)
-                            .font(.caption.weight(.semibold))
-                        Text("\(dayNumber(for: day))")
-                            .font(.headline)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 56)
-                    .foregroundStyle(day == selectedDay ? .white : .primary)
-                    .background(day == selectedDay ? Color.indigo : Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+                    CourseBlock(course: course)
                 }
-                .accessibilityLabel(day.fullName)
+                .buttonStyle(.plain)
+                .frame(
+                    width: max(0, dayWidth - 6),
+                    height: CGFloat(course.sectionCount) * sectionHeight - 6
+                )
+                .offset(
+                    x: timeColumnWidth + CGFloat(day.weekIndex) * dayWidth + 3,
+                    y: CGFloat(course.startSection - 1) * sectionHeight + 3
+                )
+                .accessibilityLabel(
+                    "\(course.name)，\(day.fullName)，第\(course.startSection)到第\(course.endSection)节"
+                )
+                .accessibilityHint("轻点查看课程详情")
             }
         }
     }
 
-    @ViewBuilder
-    private var schedule: some View {
-        if dayCourses.isEmpty {
-            ContentUnavailableView("今天没有课程", systemImage: "sun.max", description: Text("享受属于自己的时间吧。"))
-                .frame(maxWidth: .infinity, minHeight: 340)
-        } else {
-            LazyVStack(spacing: 12) {
-                ForEach(dayCourses) { course in
-                    CourseCard(course: course)
-                }
-            }
+    private func headerButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 30, height: 30)
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
     }
 
-    private var todayText: String {
+    private var weekNumber: Int {
+        calendar.component(.weekOfYear, from: weekAnchor)
+    }
+
+    private var weekRangeText: String {
+        let start = Weekday.monday.date(inWeekContaining: weekAnchor, calendar: calendar)
+        let end = Weekday.sunday.date(inWeekContaining: weekAnchor, calendar: calendar)
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "M月d日 EEEE"
-        return formatter.string(from: .now)
+        formatter.dateFormat = "yyyy/M/d"
+        return "\(formatter.string(from: start)) – \(formatter.string(from: end))"
     }
 
-    private func dayNumber(for day: Weekday) -> Int {
-        let calendar = Calendar.current
-        return calendar.component(.day, from: ScheduleEngine.date(for: day, inWeekContaining: .now, calendar: calendar))
+    private func timeText(for section: Int) -> String {
+        let minutes = SectionSchedule.startMinutes(for: section)
+        return String(format: "%02d:%02d", minutes / 60, minutes % 60)
+    }
+
+    private func isToday(_ date: Date) -> Bool {
+        calendar.isDateInToday(date)
+    }
+
+    private func moveWeek(by value: Int) {
+        withAnimation(.snappy) {
+            weekAnchor = calendar.date(byAdding: .weekOfYear, value: value, to: weekAnchor) ?? weekAnchor
+        }
     }
 }
 
-private struct CourseCard: View {
+private struct CourseBlock: View {
     let course: Course
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            Text("\(course.startSection)\n—\n\(course.endSection)")
-                .font(.caption.weight(.bold))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(course.color)
-                .frame(width: 34)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(course.name)
+                .font(.system(size: 13, weight: .bold))
+                .lineLimit(3)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(course.name).font(.title3.weight(.bold))
-                Label(course.location, systemImage: "mappin.and.ellipse")
-                Label(course.teacher, systemImage: "person")
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            Spacer()
+            Text("@ \(course.location)")
+                .font(.system(size: 10, weight: .medium))
+                .lineLimit(3)
+
+            Spacer(minLength: 0)
+
+            Text("\(course.startSection)–\(course.endSection)节")
+                .font(.system(size: 9, weight: .bold))
+                .lineLimit(1)
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(course.color.opacity(0.13), in: RoundedRectangle(cornerRadius: 22))
-        .overlay(alignment: .leading) {
-            Capsule().fill(course.color).frame(width: 5).padding(.vertical, 14)
+        .foregroundStyle(.white)
+        .padding(6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(course.color, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(.white.opacity(0.7), lineWidth: 2)
+        }
+        .shadow(color: course.color.opacity(0.24), radius: 4, y: 2)
+    }
+}
+
+private struct CourseDetailSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let course: Course
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(course.color)
+                        .frame(width: 6, height: 40)
+                    Text(course.name)
+                        .font(.title2.weight(.bold))
+                        .lineLimit(2)
+                }
+
+                Divider()
+                CourseDetailRow(icon: "calendar", text: weekdayText)
+                CourseDetailRow(
+                    icon: "clock",
+                    text: "第\(course.startSection)–\(course.endSection)节  \(timeRangeText)"
+                )
+                CourseDetailRow(icon: "mappin.and.ellipse", text: course.location)
+                CourseDetailRow(icon: "person", text: course.teacher)
+                CourseDetailRow(icon: "bell", text: reminderText)
+                Spacer()
+            }
+            .padding(24)
+            .navigationTitle("课程详情")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var weekdayText: String {
+        course.weekdays
+            .sorted(by: { $0.weekIndex < $1.weekIndex })
+            .map(\.shortName)
+            .joined(separator: "、")
+    }
+
+    private var timeRangeText: String {
+        let start = course.resolvedStartTimeMinutes
+        let duration = max(45, course.sectionCount * 45 + max(0, course.sectionCount - 1) * 10)
+        let end = start + duration
+        return String(
+            format: "%02d:%02d–%02d:%02d",
+            start / 60,
+            start % 60,
+            end / 60,
+            end % 60
+        )
+    }
+
+    private var reminderText: String {
+        course.reminderMinutesBefore.map { "提前 \($0) 分钟提醒" } ?? "未设置提醒"
+    }
+}
+
+private struct CourseDetailRow: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        Label {
+            Text(text)
+                .font(.body)
+        } icon: {
+            Image(systemName: icon)
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
         }
     }
 }

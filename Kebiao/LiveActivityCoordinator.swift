@@ -45,7 +45,7 @@ enum LiveActivityCoordinator {
         await endAll()
         let start = Date.now.addingTimeInterval(5 * 60)
         let end = start.addingTimeInterval(50 * 60)
-        startActivity(course: course, startDate: start, endDate: end)
+        try startActivity(course: course, startDate: start, endDate: end)
     }
 
     static func endAll() async {
@@ -55,10 +55,19 @@ enum LiveActivityCoordinator {
     }
 
     private static func start(_ occurrence: CourseOccurrence) {
-        startActivity(course: occurrence.course, startDate: occurrence.startDate, endDate: occurrence.endDate)
+        try? startActivity(
+            course: occurrence.course,
+            startDate: occurrence.startDate,
+            endDate: occurrence.endDate
+        )
     }
 
-    private static func startActivity(course: Course, startDate: Date, endDate: Date) {
+    @discardableResult
+    private static func startActivity(
+        course: Course,
+        startDate: Date,
+        endDate: Date
+    ) throws -> Activity<ClassActivityAttributes> {
         let attributes = ClassActivityAttributes(
             courseID: course.id,
             courseName: course.name,
@@ -73,7 +82,7 @@ enum LiveActivityCoordinator {
             state: ClassActivityAttributes.ContentState(updatedAt: .now),
             staleDate: endDate
         )
-        _ = try? Activity.request(attributes: attributes, content: content, pushType: nil)
+        return try Activity.request(attributes: attributes, content: content, pushType: nil)
     }
 
 #if compiler(>=6.2)

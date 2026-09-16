@@ -51,6 +51,6 @@ final class TimetableStore {
     private func persist() {
         guard let data = try? JSONEncoder().encode(courses) else { return }
         defaults.set(data, forKey: KebiaoConfiguration.storageKey)
-        WidgetCenter.shared.reloadTimelines(ofKind: KebiaoConfiguration.widgetKind)
+        WidgetCenter.shared.reloadAllTimelines()
     }
 }

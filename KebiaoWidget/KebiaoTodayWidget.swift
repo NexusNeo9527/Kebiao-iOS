@@ -18,8 +18,24 @@ struct TodayProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<TodayEntry>) -> Void) {
         let now = Date()
         let calendar = Calendar.current
-        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now.addingTimeInterval(3600)
-        completion(Timeline(entries: [entry(for: now)], policy: .after(tomorrow)))
+        let startOfToday = calendar.startOfDay(for: now)
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now.addingTimeInterval(86_400)
+        let todayCourses = entry(for: now).courses
+        let courseBoundaries = todayCourses.flatMap { course -> [Date] in
+            let start = calendar.date(
+                byAdding: .minute,
+                value: course.resolvedStartTimeMinutes,
+                to: startOfToday
+            ) ?? now
+            let duration = max(45, course.sectionCount * 45 + max(0, course.sectionCount - 1) * 10)
+            let end = calendar.date(byAdding: .minute, value: duration, to: start) ?? start
+            return [start, end]
+        }
+        let refreshDates = Array(Set([now] + courseBoundaries + [tomorrow]))
+            .filter { $0 >= now }
+            .sorted()
+        let entries = refreshDates.map { entry(for: $0) }
+        completion(Timeline(entries: entries, policy: .after(tomorrow)))
     }
 
     private func entry(for date: Date) -> TodayEntry {
@@ -42,6 +58,7 @@ struct KebiaoTodayWidget: Widget {
         .configurationDisplayName("今日课表")
         .description("快速查看今天的课程安排。")
         .supportedFamilies([.systemSmall, .systemMedium])
+        .contentMarginsDisabled()
     }
 }
 
@@ -64,20 +81,25 @@ private struct TodayWidgetView: View {
                 Spacer()
                 Text("今天没有课程")
                     .font(.title3.weight(.semibold))
-                Text("好好休息，或预习下一门课。")
+                Text("打开课表即可同步最新安排")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
-                ForEach(entry.courses.prefix(family == .systemSmall ? 2 : 4)) { course in
+                ForEach(visibleCourses) { course in
                     HStack(spacing: 8) {
-                        Circle().fill(course.color).frame(width: 8, height: 8)
-                        Text("第\(course.startSection)节")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.secondary)
-                        Text(course.name)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(course.color)
+                            .frame(width: 4, height: 28)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(course.name)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                            Text(courseStatus(course))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                         Spacer(minLength: 0)
                         if family == .systemMedium {
                             Text(course.location)
@@ -90,6 +112,37 @@ private struct TodayWidgetView: View {
                 Spacer(minLength: 0)
             }
         }
+        .padding()
         .widgetURL(KebiaoConfiguration.scheduleURL)
+    }
+
+    private var visibleCourses: ArraySlice<Course> {
+        let sorted = entry.courses.sorted {
+            distanceFromNow(to: $0) < distanceFromNow(to: $1)
+        }
+        return sorted.prefix(family == .systemSmall ? 2 : 4)
+    }
+
+    private func distanceFromNow(to course: Course) -> Int {
+        let nowMinutes = Calendar.current.component(.hour, from: entry.date) * 60
+            + Calendar.current.component(.minute, from: entry.date)
+        return abs(course.resolvedStartTimeMinutes - nowMinutes)
+    }
+
+    private func courseStatus(_ course: Course) -> String {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: entry.date)
+        let start = calendar.date(
+            byAdding: .minute,
+            value: course.resolvedStartTimeMinutes,
+            to: startOfDay
+        ) ?? entry.date
+        let duration = max(45, course.sectionCount * 45 + max(0, course.sectionCount - 1) * 10)
+        let end = calendar.date(byAdding: .minute, value: duration, to: start) ?? start
+
+        if entry.date >= start && entry.date < end {
+            return "进行中 · 第\(course.startSection)–\(course.endSection)节"
+        }
+        return "\(start.formatted(date: .omitted, time: .shortened)) · 第\(course.startSection)–\(course.endSection)节"
     }
 }

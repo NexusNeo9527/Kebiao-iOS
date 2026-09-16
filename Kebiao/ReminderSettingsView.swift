@@ -25,7 +25,12 @@ struct ReminderSettingsView: View {
                 Button("预览下一门课的灵动岛") {
                     previewLiveActivity()
                 }
-                .disabled(store.courses.isEmpty || !remindersEnabled)
+                .disabled(store.courses.isEmpty || !ActivityAuthorizationInfo().areActivitiesEnabled)
+
+                LabeledContent("当前活动") {
+                    Text("\(Activity<ClassActivityAttributes>.activities.count) 个")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
@@ -77,7 +82,7 @@ struct ReminderSettingsView: View {
             do {
                 try await LiveActivityCoordinator.preview(course: course)
                 await MainActor.run {
-                    statusMessage = "已创建 5 分钟倒计时预览，请查看灵动岛或锁屏。"
+                    statusMessage = "实时活动已创建，请立即查看灵动岛或锁屏；倒计时将在 5 分钟后到点。"
                 }
             } catch {
                 await MainActor.run {
