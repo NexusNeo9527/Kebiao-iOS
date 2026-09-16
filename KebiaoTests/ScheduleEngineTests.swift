@@ -107,6 +107,25 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(course.teacher, "王老师")
     }
 
+    func testSchoolTextImportAcceptsZhengfangCopiedTable() throws {
+        let text = """
+        课程名称\t任课教师\t上课地点\t上课时间
+        高等数学\t陈老师\t教学楼A201\t周一第1-2节 1-16周
+        """
+
+        let preview = try ScheduleImportService.parseSchoolText(text, sourceName: "正方教务")
+        let course = try XCTUnwrap(preview.courses.first)
+        XCTAssertEqual(preview.format, .text)
+        XCTAssertEqual(course.name, "高等数学")
+        XCTAssertEqual(course.teacher, "陈老师")
+        XCTAssertEqual(course.location, "教学楼A201")
+        XCTAssertEqual(course.weekdays, [.monday])
+        XCTAssertEqual(course.startSection, 1)
+        XCTAssertEqual(course.sectionCount, 2)
+        XCTAssertEqual(course.startWeek, 1)
+        XCTAssertEqual(course.endWeek, 16)
+    }
+
     private func makeCourse(startSection: Int, sectionCount: Int) -> Course {
         Course(
             name: "测试课程",
