@@ -2,7 +2,10 @@ import SwiftUI
 
 struct AppView: View {
     let store: TimetableStore
-    @State private var selectedTab: AppTab = ProcessInfo.processInfo.arguments.contains("--ui-test-add-course") ? .courses : .day
+    @State private var selectedTab: AppTab = {
+        let arguments = ProcessInfo.processInfo.arguments
+        return arguments.contains("--ui-test-add-course") || arguments.contains("--ui-test-import") ? .courses : .day
+    }()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
