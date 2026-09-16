@@ -7,7 +7,7 @@ struct KebiaoClassLiveActivity: Widget {
         ActivityConfiguration(for: ClassActivityAttributes.self) { context in
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Label("即将上课", systemImage: "bell.badge.fill")
+                    Label("下节课", systemImage: "bell.badge.fill")
                         .font(.headline)
                         .foregroundStyle(.indigo)
                     Spacer()
@@ -32,12 +32,18 @@ struct KebiaoClassLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: "bell.badge.fill")
+                    Label("下节课", systemImage: "bell.badge.fill")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.indigo)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(context.attributes.startDate, style: .time)
-                        .font(.caption.monospacedDigit())
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text("上课时间")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(context.attributes.startDate, style: .time)
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                    }
                 }
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.attributes.courseName)
@@ -54,14 +60,21 @@ struct KebiaoClassLiveActivity: Widget {
                     .font(.caption)
                 }
             } compactLeading: {
-                Image(systemName: "book.closed.fill")
-                    .foregroundStyle(.indigo)
+                HStack(spacing: 3) {
+                    Image(systemName: "building.2.fill")
+                        .foregroundStyle(.indigo)
+                    Text(context.attributes.location)
+                        .font(.caption2.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.55)
+                }
+                .frame(maxWidth: 58)
             } compactTrailing: {
-                Text(context.attributes.startDate, style: .timer)
-                    .font(.caption2.monospacedDigit())
-                    .frame(width: 42)
+                Text(context.attributes.startDate, style: .time)
+                    .font(.caption2.monospacedDigit().weight(.bold))
+                    .frame(width: 44)
             } minimal: {
-                Image(systemName: "bell.fill")
+                Image(systemName: "building.2.fill")
                     .foregroundStyle(.indigo)
             }
             .widgetURL(KebiaoConfiguration.scheduleURL)

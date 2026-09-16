@@ -101,6 +101,21 @@ struct ScheduleView: View {
             .frame(height: CGFloat(sectionCount) * sectionHeight)
             .padding(.bottom, 24)
         }
+        .contentShape(Rectangle())
+        .simultaneousGesture(weekSwipeGesture)
+    }
+
+    private var weekSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            .onEnded { value in
+                let horizontal = value.predictedEndTranslation.width
+                let vertical = value.predictedEndTranslation.height
+                guard abs(horizontal) >= 60,
+                      abs(horizontal) > abs(vertical) * 1.2 else {
+                    return
+                }
+                moveWeek(by: horizontal < 0 ? 1 : -1)
+            }
     }
 
     private func gridLines(dayWidth: CGFloat) -> some View {
