@@ -323,7 +323,11 @@ enum ScheduleImportService {
     private static func icsWeekdays(lines: [String], fallback date: Date) -> Set<Weekday> {
         let rule = icsValue("RRULE", in: lines).uppercased()
         let mappings: [(String, Weekday)] = [("MO", .monday), ("TU", .tuesday), ("WE", .wednesday), ("TH", .thursday), ("FR", .friday), ("SA", .saturday), ("SU", .sunday)]
-        let days = Set(mappings.compactMap { rule.contains($0.0) ? $0.1 : nil })
+        let byDayValue = rule.components(separatedBy: ";")
+            .first(where: { $0.hasPrefix("BYDAY=") })?
+            .dropFirst("BYDAY=".count) ?? ""
+        let dayCodes = Set(byDayValue.split(separator: ",").map(String.init))
+        let days = Set(mappings.compactMap { dayCodes.contains($0.0) ? $0.1 : nil })
         if !days.isEmpty { return days }
         return [Weekday.from(calendarWeekday: Calendar.current.component(.weekday, from: date))]
     }
