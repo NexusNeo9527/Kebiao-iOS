@@ -18,6 +18,12 @@ fi
 grep -q 'KebiaoClassLiveActivity()' KebiaoWidget/KebiaoWidgetBundle.swift \
   || fail "the Live Activity is missing from the WidgetBundle"
 
+grep -Fq 'Text(context.attributes.startDate, style: .time)' KebiaoWidget/KebiaoClassLiveActivity.swift \
+  || fail "the Live Activity source is missing its class-time presentation"
+
+grep -Fq 'context.attributes.location' KebiaoWidget/KebiaoClassLiveActivity.swift \
+  || fail "the Live Activity source is missing its classroom presentation"
+
 if grep -q 'UserDefaults(suiteName:' Kebiao/TimetableStore.swift; then
   fail "the app still stores courses in an App Group suite"
 fi
@@ -36,9 +42,6 @@ if [[ $# -gt 0 ]]; then
   extension_point=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$extension_path/Info.plist")
   [[ "$extension_point" == "com.apple.widgetkit-extension" ]] \
     || fail "the embedded extension is not a WidgetKit extension"
-
-  strings "$extension_path/KebiaoWidgetExtension" | grep -q '上课时间' \
-    || fail "the embedded Live Activity is missing its class-time presentation"
 fi
 
 echo "FREE-SIGNING CHECK PASSED: Live Activity is embedded without App Group dependencies"
