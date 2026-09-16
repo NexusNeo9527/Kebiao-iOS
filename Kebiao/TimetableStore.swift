@@ -3,6 +3,11 @@ import Observation
 
 @Observable
 final class TimetableStore {
+    enum ImportMode {
+        case merge
+        case replace
+    }
+
     private let defaults: UserDefaults
     var courses: [Course] = [] {
         didSet { save() }
@@ -38,6 +43,39 @@ final class TimetableStore {
         courses.removeAll { $0.id == course.id }
     }
 
+    func duplicate(_ course: Course) {
+        var copy = course
+        copy.id = UUID()
+        copy.name += " 副本"
+        save(copy)
+    }
+
+    func importCourses(_ imported: [Course], mode: ImportMode) {
+        let normalized = imported.map { course -> Course in
+            var value = course
+            value.normalize()
+            return value
+        }
+
+        switch mode {
+        case .replace:
+            courses = normalized
+        case .merge:
+            var result = courses
+            for course in normalized {
+                let signature = CourseSignature(course)
+                if let index = result.firstIndex(where: { CourseSignature($0) == signature }) {
+                    var updated = course
+                    updated.id = result[index].id
+                    result[index] = updated
+                } else {
+                    result.append(course)
+                }
+            }
+            courses = result
+        }
+    }
+
     private func save() {
         persist()
         let snapshot = courses
@@ -50,5 +88,21 @@ final class TimetableStore {
     private func persist() {
         guard let data = try? JSONEncoder().encode(courses) else { return }
         defaults.set(data, forKey: KebiaoConfiguration.storageKey)
+    }
+}
+
+private struct CourseSignature: Equatable {
+    let name: String
+    let teacher: String
+    let location: String
+    let startSection: Int
+    let weekdays: Set<Weekday>
+
+    init(_ course: Course) {
+        name = course.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        teacher = course.teacher.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        location = course.location.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        startSection = course.startSection
+        weekdays = course.weekdays
     }
 }

@@ -50,6 +50,34 @@ jobs:
           bash scripts/verify-free-sideloadly.sh
           build/DerivedData/Build/Products/Debug-iphonesimulator/Kebiao.app
 
+      - name: Capture visual QA screenshots
+        run: |
+          set -e
+          APP_PATH="build/DerivedData/Build/Products/Debug-iphonesimulator/Kebiao.app"
+          DEVICE_ID=$(xcrun simctl list devices available -j | jq -r '.devices[][] | select(.name == "iPhone 16 Pro") | .udid' | head -1)
+          test -n "$DEVICE_ID"
+          xcrun simctl boot "$DEVICE_ID" 2>/dev/null || true
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          xcrun simctl install "$DEVICE_ID" "$APP_PATH"
+          mkdir -p build/visual-qa
+
+          xcrun simctl launch --terminate-running-process "$DEVICE_ID" com.example.kebiao
+          sleep 3
+          xcrun simctl io "$DEVICE_ID" screenshot build/visual-qa/day-schedule.png
+
+          xcrun simctl terminate "$DEVICE_ID" com.example.kebiao
+          xcrun simctl launch "$DEVICE_ID" com.example.kebiao --ui-test-add-course
+          sleep 3
+          xcrun simctl io "$DEVICE_ID" screenshot build/visual-qa/add-course.png
+
+      - name: Upload visual QA screenshots
+        uses: actions/upload-artifact@v7
+        with:
+          name: Kebiao-visual-qa
+          path: build/visual-qa/*.png
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload simulator app
         uses: actions/upload-artifact@v7
         with:

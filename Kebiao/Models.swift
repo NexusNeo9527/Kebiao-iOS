@@ -47,12 +47,22 @@ struct Course: Identifiable, Codable, Hashable {
     var colorValue: Int
     var startTimeMinutes: Int?
     var reminderMinutesBefore: Int?
+    var startWeek: Int? = nil
+    var endWeek: Int? = nil
+    var credits: Double? = nil
+    var notes: String? = nil
 
     var color: Color { Color(hex: colorValue) }
     var resolvedStartTimeMinutes: Int {
         startTimeMinutes ?? SectionSchedule.startMinutes(for: startSection)
     }
     var endSection: Int { min(12, startSection + sectionCount - 1) }
+    var resolvedStartWeek: Int { startWeek ?? 1 }
+    var resolvedEndWeek: Int { endWeek ?? 20 }
+
+    func isActive(academicWeek: Int) -> Bool {
+        academicWeek >= resolvedStartWeek && academicWeek <= resolvedEndWeek
+    }
 
     mutating func normalize() {
         startSection = min(12, max(1, startSection))
@@ -62,6 +72,15 @@ struct Course: Identifiable, Codable, Hashable {
         }
         if let reminderMinutesBefore {
             self.reminderMinutesBefore = min(120, max(1, reminderMinutesBefore))
+        }
+        if let startWeek {
+            self.startWeek = min(30, max(1, startWeek))
+        }
+        if let endWeek {
+            self.endWeek = min(30, max(resolvedStartWeek, endWeek))
+        }
+        if let credits {
+            self.credits = min(20, max(0, credits))
         }
     }
 

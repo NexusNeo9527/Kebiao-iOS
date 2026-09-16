@@ -4,6 +4,8 @@ struct ScheduleView: View {
     let store: TimetableStore
     @State private var weekAnchor = Date.now
     @State private var selectedCourse: Course?
+    @State private var weekDirection = 1
+    @GestureState private var dragOffset: CGFloat = 0
 
     private let timeColumnWidth: CGFloat = 46
     private let sectionHeight: CGFloat = 76
@@ -16,10 +18,18 @@ struct ScheduleView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            weekdayHeader
-            timetable
+            ZStack {
+                VStack(spacing: 0) {
+                    weekdayHeader
+                    timetable
+                }
+                .id(weekPageID)
+                .offset(x: dragOffset)
+                .transition(weekTransition)
+            }
+            .clipped()
         }
-        .background(Color(red: 0.91, green: 0.95, blue: 1.0).ignoresSafeArea())
+        .background(KebiaoTheme.background.ignoresSafeArea())
         .navigationBarHidden(true)
         .sheet(item: $selectedCourse) { course in
             CourseDetailSheet(course: course)
@@ -45,7 +55,8 @@ struct ScheduleView: View {
                     moveWeek(by: -1)
                 }
                 Button("今天") {
-                    withAnimation(.snappy) { weekAnchor = .now }
+                    weekDirection = Date.now >= weekAnchor ? 1 : -1
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { weekAnchor = .now }
                 }
                 .font(.subheadline.weight(.semibold))
                 .buttonStyle(.bordered)
@@ -107,6 +118,10 @@ struct ScheduleView: View {
 
     private var weekSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            .updating($dragOffset) { value, state, _ in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                state = value.translation.width * 0.72
+            }
             .onEnded { value in
                 let horizontal = value.predictedEndTranslation.width
                 let vertical = value.predictedEndTranslation.height
@@ -153,7 +168,7 @@ struct ScheduleView: View {
     }
 
     private func courseBlocks(dayWidth: CGFloat) -> some View {
-        ForEach(store.courses) { course in
+        ForEach(store.courses.filter { $0.isActive(academicWeek: weekNumber) }) { course in
             ForEach(course.weekdays.sorted(by: { $0.weekIndex < $1.weekIndex })) { day in
                 Button {
                     selectedCourse = course
@@ -191,7 +206,7 @@ struct ScheduleView: View {
     }
 
     private var weekNumber: Int {
-        calendar.component(.weekOfYear, from: weekAnchor)
+        ScheduleEngine.academicWeekNumber(for: weekAnchor, calendar: calendar)
     }
 
     private var weekRangeText: String {
@@ -213,9 +228,23 @@ struct ScheduleView: View {
     }
 
     private func moveWeek(by value: Int) {
-        withAnimation(.snappy) {
+        weekDirection = value >= 0 ? 1 : -1
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
             weekAnchor = calendar.date(byAdding: .weekOfYear, value: value, to: weekAnchor) ?? weekAnchor
         }
+    }
+
+    private var weekPageID: Date {
+        Weekday.monday.date(inWeekContaining: weekAnchor, calendar: calendar)
+    }
+
+    private var weekTransition: AnyTransition {
+        let insertion: Edge = weekDirection > 0 ? .trailing : .leading
+        let removal: Edge = weekDirection > 0 ? .leading : .trailing
+        return .asymmetric(
+            insertion: .move(edge: insertion).combined(with: .opacity),
+            removal: .move(edge: removal).combined(with: .opacity)
+        )
     }
 }
 

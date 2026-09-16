@@ -2,11 +2,17 @@ import SwiftUI
 
 struct AppView: View {
     let store: TimetableStore
-    @State private var selectedTab: AppTab = .schedule
+    @State private var selectedTab: AppTab = ProcessInfo.processInfo.arguments.contains("--ui-test-add-course") ? .courses : .day
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         TabView(selection: $selectedTab) {
+            NavigationStack {
+                DayScheduleView(store: store)
+            }
+            .tabItem { Label("日程", systemImage: "calendar.day.timeline.left") }
+            .tag(AppTab.day)
+
             NavigationStack {
                 ScheduleView(store: store)
             }
@@ -24,7 +30,7 @@ struct AppView: View {
             .tabItem { Label("提醒", systemImage: "bell.badge") }
             .tag(AppTab.reminders)
         }
-        .tint(.indigo)
+        .tint(KebiaoTheme.accent)
         .onOpenURL(perform: handleDeepLink)
         .task {
             await LiveActivityCoordinator.refresh(courses: store.courses)
@@ -39,10 +45,10 @@ struct AppView: View {
 
     private func handleDeepLink(_ url: URL) {
         guard url.scheme == KebiaoConfiguration.scheduleURL.scheme else { return }
-        selectedTab = .schedule
+        selectedTab = .day
     }
 }
 
 private enum AppTab: Hashable {
-    case schedule, courses, reminders
+    case day, schedule, courses, reminders
 }
