@@ -12,7 +12,7 @@ jobs:
   build:
     name: Build iOS app and widget
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       # Xcode 16.4 is the macOS 15 image default and has the installed iOS 18.5
       # simulator device set. Newer Xcode SDKs can exist without an attached
@@ -26,13 +26,31 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Ensure an iOS simulator is available
+        run: |
+          set -e
+          RUNTIME_ID=$(xcrun simctl list runtimes available -j | jq -r '.runtimes | map(select(.isAvailable == true and (.identifier | contains("iOS")))) | sort_by(.version) | last | .identifier // empty')
+          if [ -z "$RUNTIME_ID" ]; then
+            echo "No installed iOS runtime; downloading iOS 18.5 for Xcode 16.4..."
+            xcodebuild -downloadPlatform iOS -buildVersion 18.5
+            RUNTIME_ID=$(xcrun simctl list runtimes available -j | jq -r '.runtimes | map(select(.isAvailable == true and (.identifier | contains("iOS")))) | sort_by(.version) | last | .identifier // empty')
+          fi
+          test -n "$RUNTIME_ID"
+
+          DEVICE_ID=$(xcrun simctl list devices available -j | jq -r '.devices[][] | select(.name == "Kebiao CI iPhone") | .udid' | head -1)
+          if [ -z "$DEVICE_ID" ]; then
+            DEVICE_ID=$(xcrun simctl create "Kebiao CI iPhone" com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro "$RUNTIME_ID")
+          fi
+          echo "SIMULATOR_UDID=$DEVICE_ID" >> "$GITHUB_ENV"
+          echo "Using runtime $RUNTIME_ID on simulator $DEVICE_ID"
+
       - name: Run unit tests
         run: >-
           xcodebuild
           -project Kebiao.xcodeproj
           -scheme Kebiao
           -sdk iphonesimulator
-          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest'
+          -destination "platform=iOS Simulator,id=$SIMULATOR_UDID"
           -derivedDataPath build/DerivedData
           CODE_SIGNING_ALLOWED=NO
           test
@@ -57,8 +75,7 @@ jobs:
         run: |
           set -e
           APP_PATH="build/DerivedData/Build/Products/Debug-iphonesimulator/Kebiao.app"
-          DEVICE_ID=$(xcrun simctl list devices available -j | jq -r '.devices[][] | select(.name == "iPhone 16 Pro") | .udid' | head -1)
-          test -n "$DEVICE_ID"
+          DEVICE_ID="$SIMULATOR_UDID"
           xcrun simctl boot "$DEVICE_ID" 2>/dev/null || true
           xcrun simctl bootstatus "$DEVICE_ID" -b
           xcrun simctl install "$DEVICE_ID" "$APP_PATH"
