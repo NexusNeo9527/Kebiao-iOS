@@ -4,6 +4,7 @@ enum ScheduleImportFormat: String, CaseIterable, Identifiable {
     case csv = "CSV"
     case json = "JSON"
     case ics = "ICS"
+    case text = "复制文本"
 
     var id: String { rawValue }
 }
@@ -32,6 +33,32 @@ enum ScheduleImportError: LocalizedError {
 }
 
 enum ScheduleImportService {
+    static func parseSchoolText(_ text: String, sourceName: String = "教务系统") throws -> ScheduleImportPreview {
+        let rows = text.replacingOccurrences(of: "\r\n", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { line in line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init) }
+        guard let header = rows.first, header.count > 1 else {
+            throw ScheduleImportError.malformed("请复制包含表头的课表表格")
+        }
+
+        let keys = header.map(normalizedKey)
+        var courses: [Course] = []
+        var warnings: [String] = []
+        for (offset, row) in rows.dropFirst().enumerated() {
+            var record: [String: String] = [:]
+            for index in keys.indices where index < row.count {
+                record[keys[index]] = row[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if let course = course(from: record) {
+                courses.append(course)
+            } else {
+                warnings.append("第 \(offset + 2) 行无法识别，已跳过")
+            }
+        }
+        guard !courses.isEmpty else { throw ScheduleImportError.emptyResult }
+        return ScheduleImportPreview(sourceName: sourceName, format: .text, courses: courses, warnings: warnings)
+    }
+
     static func load(url: URL) throws -> ScheduleImportPreview {
         let hasAccess = url.startAccessingSecurityScopedResource()
         defer {
@@ -170,20 +197,25 @@ enum ScheduleImportService {
 
     private static func course(from record: [String: String]) -> Course? {
         let name = value(in: record, keys: ["coursename", "course", "name", "课程名称", "课程", "科目"])
+        let scheduleText = value(in: record, keys: ["coursetime", "上课时间", "上课安排", "时间地点"])
         let dayText = value(in: record, keys: ["weekday", "weekdays", "day", "星期", "星期几", "周几"])
-        let weekdays = parseWeekdays(dayText)
+        let resolvedDayText = dayText.isEmpty ? scheduleText : dayText
+        let weekdays = parseWeekdays(resolvedDayText)
         guard !name.isEmpty, !weekdays.isEmpty else { return nil }
 
-        let section = intValue(value(in: record, keys: ["startsection", "section", "period", "开始节次", "节次", "开始节数"])) ?? 1
-        let count = intValue(value(in: record, keys: ["sectioncount", "duration", "节数", "连续节数"])) ?? 2
+        let sectionText = value(in: record, keys: ["startsection", "section", "period", "开始节次", "节次", "开始节数"])
+        let parsedSections = sectionRange(sectionText.isEmpty ? scheduleText : sectionText)
+        let section = parsedSections?.0 ?? intValue(sectionText) ?? 1
+        let count = parsedSections.map { $0.1 - $0.0 + 1 } ?? intValue(value(in: record, keys: ["sectioncount", "duration", "节数", "连续节数"])) ?? 2
         let time = timeMinutes(value(in: record, keys: ["starttime", "time", "开始时间", "上课时间"]))
-        let weeks = weekRange(value(in: record, keys: ["weeks", "weekrange", "周数", "上课周数"]))
+        let weekText = value(in: record, keys: ["weeks", "weekrange", "周数", "上课周数"])
+        let weeks = weekRange(weekText.isEmpty ? scheduleText : weekText)
         let colorIndex = name.utf8.reduce(0) { ($0 + Int($1)) % palette.count }
         let color = colorValue(value(in: record, keys: ["color", "颜色"])) ?? palette[colorIndex]
         return Course(
             name: name,
-            teacher: value(in: record, keys: ["teacher", "instructor", "老师", "教师"]),
-            location: value(in: record, keys: ["location", "classroom", "room", "教室", "地点"]),
+            teacher: value(in: record, keys: ["teacher", "instructor", "老师", "教师", "任课教师"]),
+            location: value(in: record, keys: ["location", "classroom", "room", "教室", "地点", "上课地点"]),
             startSection: min(12, max(1, section)),
             sectionCount: min(4, max(1, count)),
             weekdays: weekdays,
@@ -255,9 +287,28 @@ enum ScheduleImportService {
     }
 
     private static func weekRange(_ text: String) -> (Int, Int)? {
+        if let values = capturedIntegers(in: text, pattern: #"(\d+)\s*[-–—~至到]\s*(\d+)\s*周"#), values.count >= 2 {
+            return (values[0], max(values[0], values[1]))
+        }
         let numbers = text.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap(Int.init)
         guard let first = numbers.first else { return nil }
         return (first, max(first, numbers.dropFirst().first ?? first))
+    }
+
+    private static func sectionRange(_ text: String) -> (Int, Int)? {
+        guard let values = capturedIntegers(in: text, pattern: #"第?\s*(\d+)\s*[-–—~至到]\s*(\d+)\s*节"#), values.count >= 2 else {
+            return nil
+        }
+        return (values[0], max(values[0], values[1]))
+    }
+
+    private static func capturedIntegers(in text: String, pattern: String) -> [Int]? {
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+        return (1..<match.numberOfRanges).compactMap { index in
+            guard let range = Range(match.range(at: index), in: text) else { return nil }
+            return Int(text[range])
+        }
     }
 
     private static func timeMinutes(_ text: String) -> Int? {
