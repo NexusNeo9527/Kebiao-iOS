@@ -78,7 +78,7 @@ struct DayScheduleView: View {
     private var dateHeader: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(selectedDate, format: .dateTime.year().month().day())
+                Text(dateTitle)
                     .font(.title2.weight(.bold))
                 Text(weekday.fullName)
                     .font(.subheadline)
@@ -205,5 +205,12 @@ struct DayScheduleView: View {
         let start = Calendar.current.startOfDay(for: selectedDate)
         let duration = max(45, course.sectionCount * 45 + max(0, course.sectionCount - 1) * 10)
         return Calendar.current.date(byAdding: .minute, value: course.resolvedStartTimeMinutes + duration, to: start) ?? start
+    }
+
+    private var dateTitle: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy/M/d"
+        return formatter.string(from: selectedDate)
     }
 }

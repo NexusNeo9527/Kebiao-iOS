@@ -188,9 +188,9 @@ struct CourseEditorView: View {
             VStack(spacing: 0) {
                 editorRow(icon: "calendar", title: "周数") {
                     HStack(spacing: 4) {
-                        compactStepper(value: startWeekBinding, range: 1...30)
+                        counterControl(value: startWeekBinding, range: 1...30, label: "开始周")
                         Text("–")
-                        compactStepper(value: endWeekBinding, range: draft.resolvedStartWeek...30)
+                        counterControl(value: endWeekBinding, range: draft.resolvedStartWeek...30, label: "结束周")
                         Text("周")
                     }
                     .font(.subheadline)
@@ -226,14 +226,14 @@ struct CourseEditorView: View {
                 Divider()
 
                 editorRow(icon: "clock", title: "节数") {
-                    HStack(spacing: 8) {
-                        Stepper("第 \(draft.startSection) 节", value: $draft.startSection, in: 1...12)
-                            .labelsHidden()
-                        Text("第\(draft.startSection)–\(draft.endSection)节")
-                            .font(.subheadline)
-                        Stepper("连续 \(draft.sectionCount) 节", value: $draft.sectionCount, in: 1...min(4, 13 - draft.startSection))
-                            .labelsHidden()
+                    HStack(spacing: 5) {
+                        Text("第")
+                        counterControl(value: $draft.startSection, range: 1...12, label: "开始节次")
+                        Text("节起")
+                        counterControl(value: $draft.sectionCount, range: 1...min(4, 13 - draft.startSection), label: "连续节数")
+                        Text("节")
                     }
+                    .font(.subheadline)
                 }
                 .onChange(of: draft.startSection) { _, _ in
                     draft.sectionCount = min(draft.sectionCount, 13 - draft.startSection)
@@ -252,7 +252,7 @@ struct CourseEditorView: View {
 
                 fieldRow(icon: "mappin.and.ellipse", title: "教室", text: $draft.location)
                 Divider()
-                fieldRow(icon: "person.badge.checkmark", title: "老师", text: $draft.teacher)
+                fieldRow(icon: "person", title: "老师", text: $draft.teacher)
                 Divider()
                 fieldRow(icon: "note.text", title: "备注", text: notesBinding)
             }
@@ -302,7 +302,7 @@ struct CourseEditorView: View {
     private func editorRow<Accessory: View>(icon: String, title: String, @ViewBuilder accessory: () -> Accessory) -> some View {
         HStack(spacing: 13) {
             Image(systemName: icon).frame(width: 23).foregroundStyle(.primary)
-            Text(title)
+            Text(title).fixedSize(horizontal: true, vertical: false)
             Spacer()
             accessory()
         }
@@ -317,12 +317,29 @@ struct CourseEditorView: View {
         }
     }
 
-    private func compactStepper(value: Binding<Int>, range: ClosedRange<Int>) -> some View {
-        Stepper(value: value, in: range) {
+    private func counterControl(value: Binding<Int>, range: ClosedRange<Int>, label: String) -> some View {
+        HStack(spacing: 0) {
+            Button {
+                value.wrappedValue = max(range.lowerBound, value.wrappedValue - 1)
+            } label: {
+                Image(systemName: "minus").frame(width: 28, height: 32)
+            }
+            .disabled(value.wrappedValue <= range.lowerBound)
             Text("\(value.wrappedValue)")
-                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .frame(minWidth: 22)
+            Button {
+                value.wrappedValue = min(range.upperBound, value.wrappedValue + 1)
+            } label: {
+                Image(systemName: "plus").frame(width: 28, height: 32)
+            }
+            .disabled(value.wrappedValue >= range.upperBound)
         }
-        .fixedSize()
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.primary)
+        .background(KebiaoTheme.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label)，\(value.wrappedValue)")
     }
 
     private var startWeekBinding: Binding<Int> {
