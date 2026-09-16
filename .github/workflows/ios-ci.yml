@@ -29,11 +29,11 @@ jobs:
       - name: Ensure an iOS simulator is available
         run: |
           set -e
-          RUNTIME_ID=$(xcrun simctl list runtimes available -j | jq -r '.runtimes | map(select(.isAvailable == true and (.identifier | contains("iOS")))) | sort_by(.version) | last | .identifier // empty')
+          RUNTIME_ID=$(xcrun simctl list runtimes available -j | jq -r '.runtimes | map(select(.isAvailable == true and .version == "18.5" and (.identifier | contains("iOS")))) | first | .identifier // empty')
           if [ -z "$RUNTIME_ID" ]; then
             echo "No installed iOS runtime; downloading iOS 18.5 for Xcode 16.4..."
             xcodebuild -downloadPlatform iOS -buildVersion 18.5
-            RUNTIME_ID=$(xcrun simctl list runtimes available -j | jq -r '.runtimes | map(select(.isAvailable == true and (.identifier | contains("iOS")))) | sort_by(.version) | last | .identifier // empty')
+            RUNTIME_ID=$(xcrun simctl list runtimes available -j | jq -r '.runtimes | map(select(.isAvailable == true and .version == "18.5" and (.identifier | contains("iOS")))) | first | .identifier // empty')
           fi
           test -n "$RUNTIME_ID"
 
@@ -41,6 +41,8 @@ jobs:
           if [ -z "$DEVICE_ID" ]; then
             DEVICE_ID=$(xcrun simctl create "Kebiao CI iPhone" com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro "$RUNTIME_ID")
           fi
+          xcrun simctl boot "$DEVICE_ID" 2>/dev/null || true
+          xcrun simctl bootstatus "$DEVICE_ID" -b
           echo "SIMULATOR_UDID=$DEVICE_ID" >> "$GITHUB_ENV"
           echo "Using runtime $RUNTIME_ID on simulator $DEVICE_ID"
 
