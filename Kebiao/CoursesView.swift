@@ -227,9 +227,9 @@ struct CourseEditorView: View {
 
                 editorRow(icon: "clock", title: "节数") {
                     HStack(spacing: 5) {
-                        Text("第")
+                        Text("从")
                         counterControl(value: $draft.startSection, range: 1...12, label: "开始节次")
-                        Text("节起")
+                        Text("起")
                         counterControl(value: $draft.sectionCount, range: 1...min(4, 13 - draft.startSection), label: "连续节数")
                         Text("节")
                     }
