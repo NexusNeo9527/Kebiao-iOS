@@ -126,6 +126,44 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(course.endWeek, 16)
     }
 
+    func testSchoolTextImportAcceptsKeyValueBlocks() throws {
+        let text = """
+        课程名：数据结构
+        任课老师：王老师
+        教学地点：实验楼302
+        课程安排：周三第3-4节 2-18周
+
+        课程名：大学英语
+        任课老师：林老师
+        教学地点：教学楼B103
+        课程安排：周五第5-6节 1-16周
+        """
+
+        let preview = try ScheduleImportService.parseSchoolText(text, sourceName: "强智教务")
+        XCTAssertEqual(preview.courses.count, 2)
+        XCTAssertEqual(preview.courses[0].weekdays, [.wednesday])
+        XCTAssertEqual(preview.courses[0].startSection, 3)
+        XCTAssertEqual(preview.courses[0].sectionCount, 2)
+        XCTAssertEqual(preview.courses[0].startWeek, 2)
+        XCTAssertEqual(preview.courses[0].endWeek, 18)
+    }
+
+    func testHTMLImportAcceptsSavedSchoolTable() throws {
+        let html = """
+        <table>
+          <tr><th>课程名称</th><th>教师</th><th>上课地点</th><th>上课时间</th></tr>
+          <tr><td>操作系统</td><td>张老师</td><td>弘毅楼A310</td><td>周二第5-6节 3-16周</td></tr>
+        </table>
+        """
+
+        let preview = try ScheduleImportService.parseHTML(html, sourceName: "青果教务.html")
+        let course = try XCTUnwrap(preview.courses.first)
+        XCTAssertEqual(preview.format, .html)
+        XCTAssertEqual(course.name, "操作系统")
+        XCTAssertEqual(course.weekdays, [.tuesday])
+        XCTAssertEqual(course.location, "弘毅楼A310")
+    }
+
     private func makeCourse(startSection: Int, sectionCount: Int) -> Course {
         Course(
             name: "测试课程",

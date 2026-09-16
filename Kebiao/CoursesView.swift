@@ -32,7 +32,9 @@ struct CoursesView: View {
         }
         .navigationTitle("课程")
         .onAppear {
-            if ProcessInfo.processInfo.arguments.contains("--ui-test-add-course"), presentedSheet == nil {
+            if ProcessInfo.processInfo.arguments.contains("--ui-test-import"), presentedSheet == nil {
+                presentedSheet = .importSchedule
+            } else if ProcessInfo.processInfo.arguments.contains("--ui-test-add-course"), presentedSheet == nil {
                 presentedSheet = .create
             }
         }

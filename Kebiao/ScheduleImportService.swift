@@ -5,6 +5,7 @@ enum ScheduleImportFormat: String, CaseIterable, Identifiable {
     case json = "JSON"
     case ics = "ICS"
     case text = "复制文本"
+    case html = "网页表格"
 
     var id: String { rawValue }
 }
@@ -25,7 +26,7 @@ enum ScheduleImportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unreadableFile: "无法读取所选文件。"
-        case .unsupportedFormat: "暂不支持这种文件格式，请选择 CSV、JSON 或 ICS。"
+        case .unsupportedFormat: "暂不支持这种文件格式，请选择 CSV、JSON、ICS、HTML、TXT 或网页格式 XLS。"
         case .emptyResult: "文件中没有找到可导入的课程。"
         case .malformed(let detail): "文件内容无法识别：\(detail)"
         }
@@ -34,29 +35,44 @@ enum ScheduleImportError: LocalizedError {
 
 enum ScheduleImportService {
     static func parseSchoolText(_ text: String, sourceName: String = "教务系统") throws -> ScheduleImportPreview {
-        let rows = text.replacingOccurrences(of: "\r\n", with: "\n")
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .map { line in line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init) }
-        guard let header = rows.first, header.count > 1 else {
-            throw ScheduleImportError.malformed("请复制包含表头的课表表格")
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        if normalized.range(of: #"<\s*(table|tr|td|th)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return try parseHTML(normalized, sourceName: sourceName)
         }
 
-        let keys = header.map(normalizedKey)
-        var courses: [Course] = []
-        var warnings: [String] = []
-        for (offset, row) in rows.dropFirst().enumerated() {
-            var record: [String: String] = [:]
-            for index in keys.indices where index < row.count {
-                record[keys[index]] = row[index].trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            if let course = course(from: record) {
-                courses.append(course)
-            } else {
-                warnings.append("第 \(offset + 2) 行无法识别，已跳过")
-            }
+        let nonemptyLines = normalized.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        let separator: Character? = nonemptyLines.first?.contains("\t") == true ? "\t" : (nonemptyLines.first?.contains(",") == true ? "," : nil)
+        let result: ([Course], [String])
+        if let separator {
+            let rows = nonemptyLines.map { $0.split(separator: separator, omittingEmptySubsequences: false).map(String.init) }
+            result = courses(fromTabularRows: rows)
+        } else {
+            result = courses(fromKeyValueText: normalized)
         }
+        let courses = result.0
+        let warnings = result.1
         guard !courses.isEmpty else { throw ScheduleImportError.emptyResult }
         return ScheduleImportPreview(sourceName: sourceName, format: .text, courses: courses, warnings: warnings)
+    }
+
+    static func parseHTML(_ html: String, sourceName: String = "教务网页") throws -> ScheduleImportPreview {
+        var text = html
+        let replacements = [
+            (#"(?i)</\s*tr\s*>"#, "\n"),
+            (#"(?i)</\s*(td|th)\s*>"#, "\t"),
+            (#"(?i)<\s*br\s*/?\s*>"#, "\n"),
+            (#"(?i)<[^>]+>"#, "")
+        ]
+        for (pattern, replacement) in replacements {
+            text = text.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+        }
+        text = text.replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+        var preview = try parseSchoolText(text, sourceName: sourceName)
+        preview = ScheduleImportPreview(sourceName: preview.sourceName, format: .html, courses: preview.courses, warnings: preview.warnings)
+        return preview
     }
 
     static func load(url: URL) throws -> ScheduleImportPreview {
@@ -82,6 +98,14 @@ enum ScheduleImportService {
         case "ics", "ical":
             format = .ics
             result = try parseICS(data)
+        case "html", "htm":
+            guard let text = decodedText(data) else { throw ScheduleImportError.malformed("无法识别网页文字编码") }
+            return try parseHTML(text, sourceName: url.lastPathComponent)
+        case "txt", "tsv", "xls":
+            guard let text = decodedText(data) else { throw ScheduleImportError.malformed("无法识别文字编码") }
+            return try parseSchoolText(text, sourceName: url.lastPathComponent)
+        case "xlsx":
+            throw ScheduleImportError.malformed("XLSX 请先在教务系统中另存为 CSV，或复制表格后使用粘贴导入")
         default:
             throw ScheduleImportError.unsupportedFormat
         }
@@ -96,8 +120,7 @@ enum ScheduleImportService {
     }
 
     static func parseCSV(_ data: Data) throws -> ([Course], [String]) {
-        let gb18030 = String.Encoding(rawValue: 0x80000632)
-        guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: gb18030) else {
+        guard let text = decodedText(data) else {
             throw ScheduleImportError.malformed("无法识别文字编码")
         }
         let rows = parseCSVRows(text)
@@ -120,6 +143,53 @@ enum ScheduleImportService {
             }
         }
         return (courses, warnings)
+    }
+
+    private static func courses(fromTabularRows rows: [[String]]) -> ([Course], [String]) {
+        guard let header = rows.first, header.count > 1 else { return ([], ["缺少表头"]) }
+        let keys = header.map(normalizedKey)
+        var courses: [Course] = []
+        var warnings: [String] = []
+        for (offset, row) in rows.dropFirst().enumerated() where row.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            var record: [String: String] = [:]
+            for index in keys.indices where index < row.count {
+                record[keys[index]] = row[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if let course = course(from: record) {
+                courses.append(course)
+            } else {
+                warnings.append("第 \(offset + 2) 行无法识别，已跳过")
+            }
+        }
+        return (courses, warnings)
+    }
+
+    private static func courses(fromKeyValueText text: String) -> ([Course], [String]) {
+        let blocks = text.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: #"(?m)^\s*$"#, with: "\u{001E}", options: .regularExpression)
+            .components(separatedBy: "\u{001E}")
+        var courses: [Course] = []
+        var warnings: [String] = []
+        for (offset, block) in blocks.enumerated() {
+            var record: [String: String] = [:]
+            for line in block.components(separatedBy: .newlines) {
+                guard let separator = line.firstIndex(where: { $0 == ":" || $0 == "：" }) else { continue }
+                let key = String(line[..<separator])
+                let value = String(line[line.index(after: separator)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty { record[normalizedKey(key)] = value }
+            }
+            if let course = course(from: record) {
+                courses.append(course)
+            } else if !record.isEmpty {
+                warnings.append("第 \(offset + 1) 段无法识别，已跳过")
+            }
+        }
+        return (courses, warnings)
+    }
+
+    private static func decodedText(_ data: Data) -> String? {
+        let gb18030 = String.Encoding(rawValue: 0x80000632)
+        return String(data: data, encoding: .utf8) ?? String(data: data, encoding: gb18030)
     }
 
     static func parseJSON(_ data: Data) throws -> ([Course], [String]) {
@@ -196,8 +266,8 @@ enum ScheduleImportService {
     private static let palette = [0xFF4B68, 0x29B8AF, 0x7B68C8, 0xF29F36, 0x438DDB, 0xE96A42]
 
     private static func course(from record: [String: String]) -> Course? {
-        let name = value(in: record, keys: ["coursename", "course", "name", "课程名称", "课程", "科目"])
-        let scheduleText = value(in: record, keys: ["coursetime", "上课时间", "上课安排", "时间地点"])
+        let name = value(in: record, keys: ["coursename", "course", "name", "课程名称", "课程名", "课程", "科目"])
+        let scheduleText = value(in: record, keys: ["coursetime", "上课时间", "上课安排", "课程安排", "时间地点", "时间"])
         let dayText = value(in: record, keys: ["weekday", "weekdays", "day", "星期", "星期几", "周几"])
         let resolvedDayText = dayText.isEmpty ? scheduleText : dayText
         let weekdays = parseWeekdays(resolvedDayText)
@@ -214,8 +284,8 @@ enum ScheduleImportService {
         let color = colorValue(value(in: record, keys: ["color", "颜色"])) ?? palette[colorIndex]
         return Course(
             name: name,
-            teacher: value(in: record, keys: ["teacher", "instructor", "老师", "教师", "任课教师"]),
-            location: value(in: record, keys: ["location", "classroom", "room", "教室", "地点", "上课地点"]),
+            teacher: value(in: record, keys: ["teacher", "instructor", "老师", "教师", "任课教师", "任课老师"]),
+            location: value(in: record, keys: ["location", "classroom", "room", "教室", "地点", "上课地点", "教学地点"]),
             startSection: min(12, max(1, section)),
             sectionCount: min(4, max(1, count)),
             weekdays: weekdays,
@@ -279,9 +349,11 @@ enum ScheduleImportService {
             (.sunday, ["周日", "周天", "sunday", "sun"])
         ]
         var result = Set(mappings.compactMap { day, aliases in aliases.contains(where: normalized.contains) ? day : nil })
-        let numericTokens = normalized.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap(Int.init)
-        for number in numericTokens where (1...7).contains(number) {
-            result.insert(Weekday.allCases[number - 1])
+        if result.isEmpty {
+            let numericTokens = normalized.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap(Int.init)
+            for number in numericTokens where (1...7).contains(number) {
+                result.insert(Weekday.allCases[number - 1])
+            }
         }
         return result
     }
