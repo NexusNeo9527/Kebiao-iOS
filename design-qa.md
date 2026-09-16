@@ -31,3 +31,13 @@ The implementation was captured on an iPhone 16 Pro simulator at native 3x densi
 ## Final result
 
 passed
+
+## v1.2.0 school import QA
+
+- Implementation screenshot: `artifacts/visual-qa-35101673743/school-import.png` (iPhone 16 Pro simulator, native 3x density).
+- State: school import sheet opened from the Courses tab with Zhengfang selected.
+- Verified regions: file/paste actions, five school-system choices, selected state, platform-specific three-step guide, and scrollable supported-format section.
+- CI run `35101673743`: 11 unit tests, simulator build, free Sideloadly package verification, three screenshots, and simulator artifact upload all passed.
+- No P0, P1, or P2 visual issues were found. The first screenshot run exposed an incorrect initial tab; `AppView` routing was corrected and the final capture shows the intended import sheet.
+
+Final result: passed
