@@ -1,6 +1,6 @@
 # 课表
 
-原生 iOS 17+ SwiftUI 课表应用。它提供按日查看、课程添加/编辑/删除、本机持久化、主屏幕小组件、本地上课提醒，以及锁屏/灵动岛实时活动；首次运行自带可删除的示例课程。
+原生 iOS 17+ SwiftUI 课表应用。它提供周课表、课程添加/编辑/删除、本机持久化、本地上课提醒，以及锁屏/灵动岛实时活动；首次运行自带可删除的示例课程。
 
 ## 在 Mac 上运行
 
@@ -10,12 +10,6 @@
 
 课程资料只写入本机 `UserDefaults`，不会上传到网络。
 
-## 主屏幕小组件
-
-工程已含“今日课表”小组件（小号、中号）。在 Xcode 的项目设置里搜索 `APP_GROUP_IDENTIFIER`，把 `group.com.example.kebiao` 改成你在 Apple Developer 后台创建的 App Group；Debug/Release 使用同一个值。然后为 App 和 `KebiaoWidgetExtension` 的 **Signing & Capabilities** 启用同一个 **App Groups**。代码、Info.plist 与 entitlement 都会读取这一个构建设置，课程变更后小组件会自动刷新。
-
-点击小组件会通过 `kebiao://schedule` 返回 App 的课表页。
-
 ## 上课提醒与灵动岛
 
 1. 在课程编辑页设置真实的开始时间与提前提醒分钟数。
@@ -24,8 +18,14 @@
 
 本地通知由系统调度，即使 App 没运行也能提醒。iOS 26 会预先安排下一门课的 Live Activity，到课前时间由系统自动启动灵动岛；iOS 17/18 则在 App 处于前台或重新进入前台、且已进入课程提醒窗口时启动。旧系统若要完全无人值守地远程启动，需要 APNs 服务端。
 
+Live Activity 的课程名称、上课时间、教学楼和节次通过 ActivityKit 内容直接传给系统，不依赖 App Group。当前发布版特意不注册主屏幕课表小组件，也不声明 App Group entitlement，以便免费 Apple ID 能通过 Sideloadly 给主 App 和嵌套扩展重新签名。
+
+## 使用 Sideloadly 安装
+
+导入 Release IPA 后使用 `Apple ID Sideload`，保持 `Dropping 0 of 1 plugins`，不要删除 `KebiaoWidgetExtension.appex`。安装并首次打开 App 后，到“提醒”页点击“预览下一门课的灵动岛”进行验收。免费 Apple ID 签名通常只有 7 天有效期，需要定期刷新。
+
 ## Windows 上的自动编译
 
-`.github/workflows/ios-ci.yml` 会在每次推送、Pull Request 或手动运行时，使用 GitHub 的 macOS Runner 运行单元测试并编译 App、小组件与 Live Activity。该检查为模拟器构建，故意不使用签名证书；成功后可在 Actions 的 Artifacts 下载 `Kebiao-simulator-app`。
+`.github/workflows/ios-ci.yml` 会在每次推送、Pull Request 或手动运行时，使用 GitHub 的 macOS Runner 运行单元测试，编译 App 与 Live Activity，并检查扩展已嵌入且没有 App Group 依赖。该检查为模拟器构建，故意不使用签名证书；成功后可在 Actions 的 Artifacts 下载 `Kebiao-simulator-app`。
 
-发布或安装到真机需要另配 Apple 开发者证书、描述文件和 App Group；请不要把这些文件或密码提交进仓库。
+Actions 产出的 IPA 未签名，安装到真机前仍需由 Sideloadly 等工具重新签名。若以后恢复能自动读取课程的主屏幕小组件，则需要付费开发者账号为主 App 与 Widget 扩展配置同一个 App Group；证书、描述文件和密码不得提交进仓库。

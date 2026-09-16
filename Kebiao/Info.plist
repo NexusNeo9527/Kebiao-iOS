@@ -31,8 +31,6 @@
             </array>
         </dict>
     </array>
-    <key>KebiaoAppGroupIdentifier</key>
-    <string>$(APP_GROUP_IDENTIFIER)</string>
     <key>NSSupportsLiveActivities</key>
     <true/>
     <key>UILaunchScreen</key>

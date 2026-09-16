@@ -45,6 +45,11 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           build
 
+      - name: Verify free Sideloadly Live Activity package
+        run: >-
+          bash scripts/verify-free-sideloadly.sh
+          build/DerivedData/Build/Products/Debug-iphonesimulator/Kebiao.app
+
       - name: Upload simulator app
         uses: actions/upload-artifact@v7
         with:
