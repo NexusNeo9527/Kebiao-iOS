@@ -61,6 +61,15 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(ScheduleEngine.academicWeekNumber(for: date, calendar: calendar), 3)
     }
 
+    func testRightSwipeKeepsPreviousWeekDirectionWhenPredictionReboundsLeft() {
+        let delta = WeekSwipeDecision.weekDelta(
+            translation: CGSize(width: 84, height: 6),
+            predictedEndTranslation: CGSize(width: -130, height: 8)
+        )
+
+        XCTAssertEqual(delta, -1)
+    }
+
     func testCSVImportMapsCommonChineseSchoolHeaders() throws {
         let csv = """
         课程名称,教师,教室,星期,开始节次,节数,上课周数,开始时间
