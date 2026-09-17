@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 
 enum ScheduleImportFormat: String, CaseIterable, Identifiable {
     case csv = "CSV"
@@ -6,6 +7,8 @@ enum ScheduleImportFormat: String, CaseIterable, Identifiable {
     case ics = "ICS"
     case text = "复制文本"
     case html = "网页表格"
+    case pdf = "PDF"
+    case portal = "教务网页"
 
     var id: String { rawValue }
 }
@@ -26,7 +29,7 @@ enum ScheduleImportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unreadableFile: "无法读取所选文件。"
-        case .unsupportedFormat: "暂不支持这种文件格式，请选择 CSV、JSON、ICS、HTML、TXT 或网页格式 XLS。"
+        case .unsupportedFormat: "暂不支持这种文件格式，请选择 PDF、CSV、JSON、ICS、HTML、TXT 或网页格式 XLS。"
         case .emptyResult: "文件中没有找到可导入的课程。"
         case .malformed(let detail): "文件内容无法识别：\(detail)"
         }
@@ -75,6 +78,46 @@ enum ScheduleImportService {
         return preview
     }
 
+    static func parseSchoolPortalPayload(_ payload: String, sourceName: String = "学校教务系统") throws -> ScheduleImportPreview {
+        let parsed: ScheduleImportPreview
+        if payload.range(of: #"<\s*(table|tr|td|th)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            parsed = try parseHTML(payload, sourceName: sourceName)
+        } else {
+            parsed = try parseSchoolText(payload, sourceName: sourceName)
+        }
+        return ScheduleImportPreview(
+            sourceName: parsed.sourceName,
+            format: .portal,
+            courses: parsed.courses,
+            warnings: parsed.warnings
+        )
+    }
+
+    static func parsePDF(data: Data, sourceName: String = "课表.pdf") throws -> ScheduleImportPreview {
+        guard let document = PDFDocument(data: data) else {
+            throw ScheduleImportError.malformed("PDF 文件已损坏或受密码保护")
+        }
+        let text = document.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !text.isEmpty else {
+            throw ScheduleImportError.malformed("PDF 中没有可提取的文字；扫描版课表请先使用系统实况文本或 OCR 转成文字版 PDF")
+        }
+
+        let parsed: ScheduleImportPreview
+        do {
+            parsed = try parseSchoolText(text, sourceName: sourceName)
+        } catch ScheduleImportError.emptyResult {
+            let result = courses(fromLoosePDFText: text)
+            guard !result.0.isEmpty else { throw ScheduleImportError.emptyResult }
+            parsed = ScheduleImportPreview(sourceName: sourceName, format: .pdf, courses: result.0, warnings: result.1)
+        }
+        return ScheduleImportPreview(
+            sourceName: parsed.sourceName,
+            format: .pdf,
+            courses: parsed.courses,
+            warnings: parsed.warnings
+        )
+    }
+
     static func load(url: URL) throws -> ScheduleImportPreview {
         let hasAccess = url.startAccessingSecurityScopedResource()
         defer {
@@ -89,6 +132,8 @@ enum ScheduleImportService {
         let format: ScheduleImportFormat
         let result: ([Course], [String])
         switch extensionName {
+        case "pdf":
+            return try parsePDF(data: data, sourceName: url.lastPathComponent)
         case "csv":
             format = .csv
             result = try parseCSV(data)
@@ -183,6 +228,54 @@ enum ScheduleImportService {
             } else if !record.isEmpty {
                 warnings.append("第 \(offset + 1) 段无法识别，已跳过")
             }
+        }
+        return (courses, warnings)
+    }
+
+    private static func courses(fromLoosePDFText text: String) -> ([Course], [String]) {
+        let lines = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        var courses: [Course] = []
+        var warnings: [String] = []
+
+        for (index, line) in lines.enumerated() {
+            let weekdays = parseWeekdays(line)
+            guard !weekdays.isEmpty, let sections = sectionRange(line) else { continue }
+
+            let tokens = line
+                .replacingOccurrences(of: #"\s{2,}"#, with: "\t", options: .regularExpression)
+                .components(separatedBy: CharacterSet(charactersIn: "\t|｜,，;；"))
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let name = tokens.first(where: {
+                !$0.contains("周") && !$0.contains("星期") && sectionRange($0) == nil &&
+                !$0.contains("课程名称") && !$0.contains("任课教师") && !$0.contains("上课地点")
+            }) ?? ""
+            guard name.count >= 2 else {
+                warnings.append("PDF 第 \(index + 1) 行缺少可识别的课程名称，已跳过")
+                continue
+            }
+
+            let teacher = tokens.first(where: { $0.contains("老师") || $0.contains("教师") || $0.contains("教授") }) ?? ""
+            let location = tokens.first(where: {
+                $0 != name && ($0.contains("楼") || $0.contains("室") || $0.contains("馆") || $0.contains("场"))
+            }) ?? ""
+            let weeks = weekRange(line)
+            let colorIndex = name.utf8.reduce(0) { ($0 + Int($1)) % palette.count }
+            courses.append(Course(
+                name: name,
+                teacher: teacher,
+                location: location,
+                startSection: min(12, max(1, sections.0)),
+                sectionCount: min(4, max(1, sections.1 - sections.0 + 1)),
+                weekdays: weekdays,
+                colorValue: palette[colorIndex],
+                startTimeMinutes: nil,
+                reminderMinutesBefore: 10,
+                startWeek: weeks?.0,
+                endWeek: weeks?.1
+            ))
         }
         return (courses, warnings)
     }

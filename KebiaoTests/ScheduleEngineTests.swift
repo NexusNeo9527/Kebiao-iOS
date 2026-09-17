@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import Kebiao
 
 final class ScheduleEngineTests: XCTestCase {
@@ -162,6 +163,48 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(course.name, "操作系统")
         XCTAssertEqual(course.weekdays, [.tuesday])
         XCTAssertEqual(course.location, "弘毅楼A310")
+    }
+
+    func testSchoolPortalPayloadAcceptsLoggedInTimetableHTML() throws {
+        let html = """
+        <table>
+          <tr><th>课程名称</th><th>任课教师</th><th>上课地点</th><th>上课时间</th></tr>
+          <tr><td>编译原理</td><td>刘老师</td><td>信工楼B205</td><td>周四第3-4节 2-17周</td></tr>
+        </table>
+        """
+
+        let preview = try ScheduleImportService.parseSchoolPortalPayload(html, sourceName: "学校教务系统")
+        let course = try XCTUnwrap(preview.courses.first)
+        XCTAssertEqual(preview.format, .portal)
+        XCTAssertEqual(course.name, "编译原理")
+        XCTAssertEqual(course.weekdays, [.thursday])
+        XCTAssertEqual(course.startWeek, 2)
+        XCTAssertEqual(course.endWeek, 17)
+    }
+
+    func testPDFImportExtractsTextTimetable() throws {
+        let bounds = CGRect(x: 0, y: 0, width: 595, height: 842)
+        let data = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
+            context.beginPage()
+            let text = """
+            课程名称,任课教师,上课地点,上课时间
+            计算机网络,赵老师,实验楼401,周二第7-8节 1-16周
+            """
+            text.draw(
+                in: bounds.insetBy(dx: 36, dy: 36),
+                withAttributes: [.font: UIFont.systemFont(ofSize: 16)]
+            )
+        }
+
+        let preview = try ScheduleImportService.parsePDF(data: data, sourceName: "学生课表.pdf")
+        let course = try XCTUnwrap(preview.courses.first)
+        XCTAssertEqual(preview.format, .pdf)
+        XCTAssertEqual(course.name, "计算机网络")
+        XCTAssertEqual(course.teacher, "赵老师")
+        XCTAssertEqual(course.location, "实验楼401")
+        XCTAssertEqual(course.weekdays, [.tuesday])
+        XCTAssertEqual(course.startSection, 7)
+        XCTAssertEqual(course.sectionCount, 2)
     }
 
     private func makeCourse(startSection: Int, sectionCount: Int) -> Course {

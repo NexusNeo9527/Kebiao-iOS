@@ -10,6 +10,8 @@ struct ImportScheduleView: View {
     @State private var pendingMode: TimetableStore.ImportMode?
     @State private var selectedPlatform: SchoolImportPlatform = .zhengfang
     @State private var presentedSheet: ImportInputSheet?
+    @AppStorage("kebiao.school.name") private var schoolName = ""
+    @AppStorage("kebiao.school.portalURL") private var portalAddress = ""
 
     var body: some View {
         NavigationStack {
@@ -19,6 +21,7 @@ struct ImportScheduleView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         introCard
                         platformPicker
+                        portalLoginCard
                         importGuide
                         supportedFormats
                         if let preview { previewCard(preview) }
@@ -36,7 +39,7 @@ struct ImportScheduleView: View {
             }
             .fileImporter(
                 isPresented: $isImporterPresented,
-                allowedContentTypes: [.commaSeparatedText, .json, .calendarEvent, .plainText, .html, .data]
+                allowedContentTypes: [.pdf, .commaSeparatedText, .json, .calendarEvent, .plainText, .html, .data]
             ) { result in
                 switch result {
                 case .success(let url):
@@ -54,6 +57,12 @@ struct ImportScheduleView: View {
                 switch sheet {
                 case .paste:
                     PasteScheduleView(platform: selectedPlatform, preview: $preview)
+                case .portal(let url):
+                    SchoolPortalLoginView(
+                        url: url,
+                        sourceName: schoolName.isEmpty ? selectedPlatform.title : schoolName,
+                        preview: $preview
+                    )
                 }
             }
             .alert("导入失败", isPresented: Binding(
@@ -92,12 +101,12 @@ struct ImportScheduleView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("从学校导入课表")
                             .font(.headline)
-                        Text("文件、网页表格或复制文本都可以")
+                        Text("直接登录、PDF、文件或复制文本都可以")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                 }
-                Text("选择你的教务系统，然后导入导出文件，或直接复制课表表格粘贴。全部在本机解析，不需要提交账号或密码。")
+                Text("可以直接打开任意学校的教务系统读取当前课表，也可以导入 PDF、导出文件或复制表格。内容只在本机解析。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -124,6 +133,49 @@ struct ImportScheduleView: View {
                 .buttonBorderShape(.roundedRectangle(radius: 14))
             }
         }
+    }
+
+    private var portalLoginCard: some View {
+        KebiaoCard {
+            VStack(alignment: .leading, spacing: 13) {
+                Label("直接登录学校教务系统", systemImage: "person.badge.key.fill")
+                    .font(.headline)
+                TextField("学校名称（选填）", text: $schoolName)
+                    .textContentType(.organizationName)
+                    .padding(12)
+                    .background(KebiaoTheme.background, in: RoundedRectangle(cornerRadius: 12))
+                TextField("教务系统网址，例如 https://jw.example.edu.cn", text: $portalAddress)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    .textContentType(.URL)
+                    .autocorrectionDisabled()
+                    .padding(12)
+                    .background(KebiaoTheme.background, in: RoundedRectangle(cornerRadius: 12))
+                Button {
+                    if let portalURL { presentedSheet = .portal(portalURL) }
+                } label: {
+                    Label("打开并登录", systemImage: "safari")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.roundedRectangle(radius: 14))
+                .tint(KebiaoTheme.accent)
+                .disabled(portalURL == nil)
+                Text("账号和密码直接提交给学校网页，App 不会保存。登录后打开个人课表，再点“读取当前课表”。验证码、统一身份认证和校园 VPN 仍由学校系统处理。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var portalURL: URL? {
+        let trimmed = portalAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed),
+              url.scheme?.lowercased() == "https",
+              url.host != nil else { return nil }
+        return url
     }
 
     private var platformPicker: some View {
@@ -196,6 +248,7 @@ struct ImportScheduleView: View {
                 .padding(.horizontal, 4)
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 formatBadge("CSV", detail: "教务表格", icon: "tablecells")
+                formatBadge("PDF", detail: "文字版课表", icon: "doc.richtext")
                 formatBadge("ICS", detail: "日历课表", icon: "calendar")
                 formatBadge("HTML/XLS", detail: "保存网页", icon: "safari")
                 formatBadge("复制文本", detail: "网页或表格", icon: "doc.on.clipboard")
@@ -322,18 +375,25 @@ enum SchoolImportPlatform: String, CaseIterable, Identifiable {
     var steps: [String] {
         switch self {
         case .zhengfang:
-            ["进入信息查询或学生课表查询。", "优先导出 CSV/Excel；没有导出按钮时，复制包含表头的课表表格。", "回到这里选择文件或粘贴课表，并确认预览。"]
+            ["填写学校提供的 HTTPS 教务网址，点“打开并登录”；也可直接选择导出的 PDF。", "登录后进入信息查询或学生课表查询，再点“读取当前课表”。", "检查本机预览，然后选择合并或替换现有课程。"]
         case .qiangzhi, .qingguo, .shuwei:
-            ["登录学校教务系统并打开个人课表。", "导出 CSV/ICS/网页，或复制课程名称、教师、地点、上课时间等字段。", "回到这里导入；无法识别的行会单独提示，不会覆盖原课表。"]
+            ["填写学校提供的 HTTPS 教务网址并直接登录。", "打开个人课表后点“读取当前课表”，或下载 PDF、CSV、ICS 再选择文件。", "无法识别的行会单独提示，确认前不会覆盖原课表。"]
         case .generic:
-            ["在学校课表页面寻找导出、打印或保存网页。", "支持 CSV、ICS、HTML、文本及多数网页格式 XLS；也可直接复制表格。", "先检查本机预览，再选择合并或替换现有课程。"]
+            ["输入任意学校的 HTTPS 教务网址并登录，然后打开课表表格。", "可直接读取当前网页，也支持文字版 PDF、CSV、ICS、HTML、文本及网页格式 XLS。", "先检查本机预览，再选择合并或替换现有课程。"]
         }
     }
 }
 
-private enum ImportInputSheet: String, Identifiable {
+private enum ImportInputSheet: Identifiable {
     case paste
-    var id: String { rawValue }
+    case portal(URL)
+
+    var id: String {
+        switch self {
+        case .paste: "paste"
+        case .portal(let url): "portal-\(url.absoluteString)"
+        }
+    }
 }
 
 private struct PasteScheduleView: View {
