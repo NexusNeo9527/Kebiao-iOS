@@ -1,5 +1,22 @@
 import SwiftUI
 
+enum WeekSwipeDecision {
+    static func weekDelta(
+        translation: CGSize,
+        predictedEndTranslation: CGSize,
+        minimumDistance: CGFloat = 60
+    ) -> Int? {
+        let horizontal = translation.width
+        let vertical = translation.height
+        let projectedDistance = max(abs(horizontal), abs(predictedEndTranslation.width))
+        guard projectedDistance >= minimumDistance,
+              abs(horizontal) > abs(vertical) * 1.2 else {
+            return nil
+        }
+        return horizontal < 0 ? 1 : -1
+    }
+}
+
 struct ScheduleView: View {
     let store: TimetableStore
     @State private var weekAnchor = Date.now
@@ -123,13 +140,11 @@ struct ScheduleView: View {
                 state = value.translation.width * 0.72
             }
             .onEnded { value in
-                let horizontal = value.predictedEndTranslation.width
-                let vertical = value.predictedEndTranslation.height
-                guard abs(horizontal) >= 60,
-                      abs(horizontal) > abs(vertical) * 1.2 else {
-                    return
-                }
-                moveWeek(by: horizontal < 0 ? 1 : -1)
+                guard let delta = WeekSwipeDecision.weekDelta(
+                    translation: value.translation,
+                    predictedEndTranslation: value.predictedEndTranslation
+                ) else { return }
+                moveWeek(by: delta)
             }
     }
 
