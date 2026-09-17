@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import Vision
 
 enum ScheduleImportFormat: String, CaseIterable, Identifiable {
     case csv = "CSV"
@@ -97,10 +98,8 @@ enum ScheduleImportService {
         guard let document = PDFDocument(data: data) else {
             throw ScheduleImportError.malformed("PDF 文件已损坏或受密码保护")
         }
-        let text = document.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !text.isEmpty else {
-            throw ScheduleImportError.malformed("PDF 中没有可提取的文字；扫描版课表请先使用系统实况文本或 OCR 转成文字版 PDF")
-        }
+        let embeddedText = document.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let text = embeddedText.isEmpty ? try recognizedText(in: document) : embeddedText
 
         let parsed: ScheduleImportPreview
         do {
@@ -344,6 +343,44 @@ enum ScheduleImportService {
 
     private static func containsExplicitWeekRange(_ text: String) -> Bool {
         text.range(of: #"\d+\s*[-–—~至到]\s*\d+\s*周"#, options: .regularExpression) != nil
+    }
+
+    private static func recognizedText(in document: PDFDocument) throws -> String {
+        var pages: [String] = []
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index) else { continue }
+            let image = page.thumbnail(of: CGSize(width: 2000, height: 2800), for: .mediaBox)
+            guard let cgImage = image.cgImage else { continue }
+
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            if let supported = try? request.supportedRecognitionLanguages() {
+                let preferred = ["zh-Hans", "en-US"].filter(supported.contains)
+                if !preferred.isEmpty { request.recognitionLanguages = preferred }
+            }
+
+            do {
+                try VNImageRequestHandler(cgImage: cgImage).perform([request])
+            } catch {
+                throw ScheduleImportError.malformed("扫描 PDF 文字识别失败：\(error.localizedDescription)")
+            }
+
+            let observations = (request.results ?? []).sorted { lhs, rhs in
+                if abs(lhs.boundingBox.midY - rhs.boundingBox.midY) > 0.015 {
+                    return lhs.boundingBox.midY > rhs.boundingBox.midY
+                }
+                return lhs.boundingBox.minX < rhs.boundingBox.minX
+            }
+            let lines = observations.compactMap { $0.topCandidates(1).first?.string }
+            if !lines.isEmpty { pages.append(lines.joined(separator: "\n")) }
+        }
+
+        let text = pages.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            throw ScheduleImportError.malformed("扫描 PDF 中没有识别到课表文字，请换用更清晰、方向正确的文件")
+        }
+        return text
     }
 
     private static func decodedText(_ data: Data) -> String? {
