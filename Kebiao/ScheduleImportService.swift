@@ -331,14 +331,14 @@ enum ScheduleImportService {
             line.trimmingCharacters(in: CharacterSet(charactersIn: ":："))
         )
         switch key {
-        case "课程名称", "课程名", "课程", "科目": "课程名称"
-        case "任课教师", "任课老师", "教师", "老师": "任课教师"
-        case "上课地点", "教学地点", "地点", "教室": "上课地点"
-        case "上课时间", "课程安排", "上课安排", "时间地点": "上课时间"
-        case "星期", "星期几", "周几": "星期"
-        case "节次", "开始节次", "开始节数": "节次"
-        case "上课周数", "周数", "周次": "上课周数"
-        default: nil
+        case "课程名称", "课程名", "课程", "科目": return "课程名称"
+        case "任课教师", "任课老师", "教师", "老师": return "任课教师"
+        case "上课地点", "教学地点", "地点", "教室": return "上课地点"
+        case "上课时间", "课程安排", "上课安排", "时间地点": return "上课时间"
+        case "星期", "星期几", "周几": return "星期"
+        case "节次", "开始节次", "开始节数": return "节次"
+        case "上课周数", "周数", "周次": return "上课周数"
+        default: return nil
         }
     }
 
