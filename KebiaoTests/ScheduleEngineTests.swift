@@ -246,6 +246,45 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(course.endWeek, 18)
     }
 
+    func testPDFImportUsesOCRForImageOnlyTimetable() throws {
+        let imageSize = CGSize(width: 1200, height: 800)
+        let image = UIGraphicsImageRenderer(size: imageSize).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: imageSize))
+            let text = """
+            course: Networks
+            teacher: Lee
+            location: B201
+            weekday: Monday
+            section: 3-4
+            weeks: 2-18
+            """
+            text.draw(
+                in: CGRect(x: 70, y: 70, width: 1060, height: 660),
+                withAttributes: [
+                    .font: UIFont.monospacedSystemFont(ofSize: 42, weight: .medium),
+                    .foregroundColor: UIColor.black
+                ]
+            )
+        }
+        let bounds = CGRect(x: 0, y: 0, width: 595, height: 842)
+        let data = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
+            context.beginPage()
+            image.draw(in: bounds.insetBy(dx: 20, dy: 20))
+        }
+
+        let preview = try ScheduleImportService.parsePDF(data: data, sourceName: "扫描课表.pdf")
+        let course = try XCTUnwrap(preview.courses.first)
+        XCTAssertEqual(course.name, "Networks")
+        XCTAssertEqual(course.teacher, "Lee")
+        XCTAssertEqual(course.location, "B201")
+        XCTAssertEqual(course.weekdays, [.monday])
+        XCTAssertEqual(course.startSection, 3)
+        XCTAssertEqual(course.sectionCount, 2)
+        XCTAssertEqual(course.startWeek, 2)
+        XCTAssertEqual(course.endWeek, 18)
+    }
+
     private func makeCourse(startSection: Int, sectionCount: Int) -> Course {
         Course(
             name: "测试课程",
