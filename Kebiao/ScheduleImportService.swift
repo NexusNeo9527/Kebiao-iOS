@@ -106,7 +106,8 @@ enum ScheduleImportService {
         do {
             parsed = try parseSchoolText(text, sourceName: sourceName)
         } catch ScheduleImportError.emptyResult {
-            let result = courses(fromLoosePDFText: text)
+            let reconstructed = courses(fromSeparatedPDFText: text)
+            let result = reconstructed.0.isEmpty ? courses(fromLoosePDFText: text) : reconstructed
             guard !result.0.isEmpty else { throw ScheduleImportError.emptyResult }
             parsed = ScheduleImportPreview(sourceName: sourceName, format: .pdf, courses: result.0, warnings: result.1)
         }
@@ -278,6 +279,71 @@ enum ScheduleImportService {
             ))
         }
         return (courses, warnings)
+    }
+
+    private static func courses(fromSeparatedPDFText text: String) -> ([Course], [String]) {
+        let lines = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        var courses: [Course] = []
+        var warnings: [String] = []
+        var record: [String: String] = [:]
+        var pendingKey: String?
+
+        func flushRecord() {
+            guard !record.isEmpty else { return }
+            if let parsed = course(from: record) {
+                courses.append(parsed)
+            } else if record["课程名称"] != nil {
+                warnings.append("PDF 中有一门课程缺少可识别的星期或节次，已跳过")
+            }
+            record.removeAll(keepingCapacity: true)
+            pendingKey = nil
+        }
+
+        for line in lines {
+            if let key = pdfFieldKey(line) {
+                if key == "课程名称", record["课程名称"] != nil {
+                    flushRecord()
+                }
+                pendingKey = key
+                continue
+            }
+
+            if let key = pendingKey {
+                record[key] = line
+                pendingKey = nil
+                continue
+            }
+
+            guard record["课程名称"] != nil else { continue }
+            if !parseWeekdays(line).isEmpty || sectionRange(line) != nil || containsExplicitWeekRange(line) {
+                let current = record["上课时间", default: ""]
+                record["上课时间"] = [current, line].filter { !$0.isEmpty }.joined(separator: " ")
+            }
+        }
+        flushRecord()
+        return (courses, warnings)
+    }
+
+    private static func pdfFieldKey(_ line: String) -> String? {
+        let key = normalizedKey(
+            line.trimmingCharacters(in: CharacterSet(charactersIn: ":："))
+        )
+        switch key {
+        case "课程名称", "课程名", "课程", "科目": "课程名称"
+        case "任课教师", "任课老师", "教师", "老师": "任课教师"
+        case "上课地点", "教学地点", "地点", "教室": "上课地点"
+        case "上课时间", "课程安排", "上课安排", "时间地点": "上课时间"
+        case "星期", "星期几", "周几": "星期"
+        case "节次", "开始节次", "开始节数": "节次"
+        case "上课周数", "周数", "周次": "上课周数"
+        default: nil
+        }
+    }
+
+    private static func containsExplicitWeekRange(_ text: String) -> Bool {
+        text.range(of: #"\d+\s*[-–—~至到]\s*\d+\s*周"#, options: .regularExpression) != nil
     }
 
     private static func decodedText(_ data: Data) -> String? {
