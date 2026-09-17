@@ -216,6 +216,36 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(course.sectionCount, 2)
     }
 
+    func testPDFImportReassemblesCourseFieldsExtractedOnSeparateLines() throws {
+        let bounds = CGRect(x: 0, y: 0, width: 595, height: 842)
+        let data = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
+            context.beginPage()
+            let lines = [
+                "课程名称", "计算机组成原理",
+                "任课教师", "周老师",
+                "上课地点", "博学楼A203",
+                "上课时间", "周三", "第3-4节", "2-18周"
+            ]
+            for (index, line) in lines.enumerated() {
+                line.draw(
+                    at: CGPoint(x: 36, y: 36 + CGFloat(index) * 28),
+                    withAttributes: [.font: UIFont.systemFont(ofSize: 16)]
+                )
+            }
+        }
+
+        let preview = try ScheduleImportService.parsePDF(data: data, sourceName: "分行课表.pdf")
+        let course = try XCTUnwrap(preview.courses.first)
+        XCTAssertEqual(course.name, "计算机组成原理")
+        XCTAssertEqual(course.teacher, "周老师")
+        XCTAssertEqual(course.location, "博学楼A203")
+        XCTAssertEqual(course.weekdays, [.wednesday])
+        XCTAssertEqual(course.startSection, 3)
+        XCTAssertEqual(course.sectionCount, 2)
+        XCTAssertEqual(course.startWeek, 2)
+        XCTAssertEqual(course.endWeek, 18)
+    }
+
     private func makeCourse(startSection: Int, sectionCount: Int) -> Course {
         Course(
             name: "测试课程",
