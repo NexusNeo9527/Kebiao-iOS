@@ -377,6 +377,7 @@ enum ScheduleImportService {
         }
 
         let text = pages.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        print("[DEBUG-OCR-PDF] \(text.replacingOccurrences(of: "\n", with: " | "))")
         guard !text.isEmpty else {
             throw ScheduleImportError.malformed("扫描 PDF 中没有识别到课表文字，请换用更清晰、方向正确的文件")
         }
