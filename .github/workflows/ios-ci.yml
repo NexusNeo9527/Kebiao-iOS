@@ -57,24 +57,6 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           test
 
-      - name: Print failed test diagnostics
-        if: failure()
-        run: |
-          RESULT_BUNDLE=$(find build/DerivedData/Logs/Test -maxdepth 1 -name '*.xcresult' -print -quit)
-          test -n "$RESULT_BUNDLE"
-          xcrun xcresulttool get test-results summary --path "$RESULT_BUNDLE" --compact
-          xcrun xcresulttool get test-results tests --path "$RESULT_BUNDLE" --compact
-          xcrun xcresulttool get test-results test-details \
-            --path "$RESULT_BUNDLE" \
-            --test-id 'test://com.apple.xcode/Kebiao/KebiaoTests/ScheduleEngineTests/testPDFImportUsesOCRForImageOnlyTimetable' \
-            --compact
-          mkdir -p build/xcresult-attachments
-          xcrun xcresulttool export attachments \
-            --path "$RESULT_BUNDLE" \
-            --output-path build/xcresult-attachments \
-            --test-id 'test://com.apple.xcode/Kebiao/KebiaoTests/ScheduleEngineTests/testPDFImportUsesOCRForImageOnlyTimetable'
-          find build/xcresult-attachments -type f -maxdepth 2 -print -exec sed -n '1,240p' {} \;
-
       - name: Build for iOS Simulator
         run: >-
           xcodebuild

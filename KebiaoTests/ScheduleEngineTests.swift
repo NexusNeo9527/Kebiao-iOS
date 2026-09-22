@@ -273,16 +273,17 @@ final class ScheduleEngineTests: XCTestCase {
             image.draw(in: bounds.insetBy(dx: 20, dy: 20))
         }
 
-        let diagnosis: String
-        do {
-            let preview = try ScheduleImportService.parsePDF(data: data, sourceName: "扫描课表.pdf")
-            diagnosis = preview.courses.map {
-                "name=\($0.name),teacher=\($0.teacher),location=\($0.location),weekdays=\($0.weekdays),section=\($0.startSection)-\($0.endSection),weeks=\($0.startWeek.map(String.init) ?? "nil")-\($0.endWeek.map(String.init) ?? "nil")"
-            }.joined(separator: " | ")
-        } catch {
-            diagnosis = "error=\(error.localizedDescription)"
-        }
-        XCTFail("[DEBUG-OCR-PDF] \(diagnosis)")
+        let preview = try ScheduleImportService.parsePDF(data: data, sourceName: "扫描课表.pdf")
+        let course = try XCTUnwrap(preview.courses.first)
+
+        XCTAssertEqual(course.name, "Networks")
+        XCTAssertEqual(course.teacher, "Lee")
+        XCTAssertEqual(course.location, "B201")
+        XCTAssertEqual(course.weekdays, [.monday])
+        XCTAssertEqual(course.startSection, 3)
+        XCTAssertEqual(course.sectionCount, 2)
+        XCTAssertEqual(course.startWeek, 2)
+        XCTAssertEqual(course.endWeek, 18)
     }
 
     private func makeCourse(startSection: Int, sectionCount: Int) -> Course {

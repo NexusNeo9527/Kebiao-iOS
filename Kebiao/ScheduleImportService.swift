@@ -107,14 +107,7 @@ enum ScheduleImportService {
         } catch ScheduleImportError.emptyResult {
             let reconstructed = courses(fromSeparatedPDFText: text)
             let result = reconstructed.0.isEmpty ? courses(fromLoosePDFText: text) : reconstructed
-            guard !result.0.isEmpty else {
-                if embeddedText.isEmpty {
-                    throw ScheduleImportError.malformed(
-                        "[DEBUG-OCR-PDF] " + text.replacingOccurrences(of: "\n", with: " | ")
-                    )
-                }
-                throw ScheduleImportError.emptyResult
-            }
+            guard !result.0.isEmpty else { throw ScheduleImportError.emptyResult }
             parsed = ScheduleImportPreview(sourceName: sourceName, format: .pdf, courses: result.0, warnings: result.1)
         }
         return ScheduleImportPreview(
@@ -576,7 +569,11 @@ enum ScheduleImportService {
             (.saturday, ["周六", "saturday", "sat"]),
             (.sunday, ["周日", "周天", "sunday", "sun"])
         ]
-        var result = Set(mappings.compactMap { day, aliases in aliases.contains(where: normalized.contains) ? day : nil })
+        var result = Set(mappings.compactMap { day, aliases in
+            aliases.contains(where: normalized.contains) || containsNearEnglishWeekday(normalized, aliases: aliases)
+                ? day
+                : nil
+        })
         if result.isEmpty {
             let numericTokens = normalized.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap(Int.init)
             for number in numericTokens where (1...7).contains(number) {
@@ -584,6 +581,39 @@ enum ScheduleImportService {
             }
         }
         return result
+    }
+
+    private static func containsNearEnglishWeekday(_ text: String, aliases: [String]) -> Bool {
+        let fullNames = aliases.filter { $0.count > 3 }
+        guard !fullNames.isEmpty else { return false }
+        let tokens = text.components(separatedBy: CharacterSet.letters.inverted)
+            .filter { $0.count > 3 }
+        return tokens.contains { token in
+            fullNames.contains { editDistance(token, $0, limit: 1) <= 1 }
+        }
+    }
+
+    private static func editDistance(_ lhs: String, _ rhs: String, limit: Int) -> Int {
+        let left = Array(lhs)
+        let right = Array(rhs)
+        guard abs(left.count - right.count) <= limit else { return limit + 1 }
+
+        var previous = Array(0...right.count)
+        for (leftIndex, leftCharacter) in left.enumerated() {
+            var current = [leftIndex + 1]
+            var rowMinimum = current[0]
+            for (rightIndex, rightCharacter) in right.enumerated() {
+                let substitution = previous[rightIndex] + (leftCharacter == rightCharacter ? 0 : 1)
+                let insertion = current[rightIndex] + 1
+                let deletion = previous[rightIndex + 1] + 1
+                let value = min(substitution, min(insertion, deletion))
+                current.append(value)
+                rowMinimum = min(rowMinimum, value)
+            }
+            if rowMinimum > limit { return limit + 1 }
+            previous = current
+        }
+        return previous[right.count]
     }
 
     private static func weekRange(_ text: String) -> (Int, Int)? {

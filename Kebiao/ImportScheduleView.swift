@@ -5,6 +5,7 @@ struct ImportScheduleView: View {
     let store: TimetableStore
     @Environment(\.dismiss) private var dismiss
     @State private var isImporterPresented = false
+    @State private var isParsingFile = false
     @State private var preview: ScheduleImportPreview?
     @State private var errorMessage: String?
     @State private var pendingMode: TimetableStore.ImportMode?
@@ -43,14 +44,24 @@ struct ImportScheduleView: View {
             ) { result in
                 switch result {
                 case .success(let url):
-                    do {
-                        preview = try ScheduleImportService.load(url: url)
-                        errorMessage = nil
-                    } catch {
-                        errorMessage = error.localizedDescription
-                    }
+                    parseImportedFile(url)
                 case .failure(let error):
                     errorMessage = error.localizedDescription
+                }
+            }
+            .overlay {
+                if isParsingFile {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("正在解析课表…")
+                            .font(.subheadline.weight(.semibold))
+                        Text("扫描型 PDF 会在本机进行文字识别")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(22)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .shadow(color: .black.opacity(0.12), radius: 18, y: 8)
                 }
             }
             .sheet(item: $presentedSheet) { sheet in
@@ -248,7 +259,7 @@ struct ImportScheduleView: View {
                 .padding(.horizontal, 4)
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 formatBadge("CSV", detail: "教务表格", icon: "tablecells")
-                formatBadge("PDF", detail: "文字版课表", icon: "doc.richtext")
+                formatBadge("PDF", detail: "文字或扫描课表", icon: "doc.richtext")
                 formatBadge("ICS", detail: "日历课表", icon: "calendar")
                 formatBadge("HTML/XLS", detail: "保存网页", icon: "safari")
                 formatBadge("复制文本", detail: "网页或表格", icon: "doc.on.clipboard")
@@ -337,6 +348,23 @@ struct ImportScheduleView: View {
         pendingMode = nil
         dismiss()
     }
+
+    private func parseImportedFile(_ url: URL) {
+        isParsingFile = true
+        preview = nil
+        errorMessage = nil
+        Task {
+            do {
+                let importedPreview = try await Task.detached(priority: .userInitiated) {
+                    try ScheduleImportService.load(url: url)
+                }.value
+                preview = importedPreview
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isParsingFile = false
+        }
+    }
 }
 
 enum SchoolImportPlatform: String, CaseIterable, Identifiable {
@@ -379,7 +407,7 @@ enum SchoolImportPlatform: String, CaseIterable, Identifiable {
         case .qiangzhi, .qingguo, .shuwei:
             ["填写学校提供的 HTTPS 教务网址并直接登录。", "打开个人课表后点“读取当前课表”，或下载 PDF、CSV、ICS 再选择文件。", "无法识别的行会单独提示，确认前不会覆盖原课表。"]
         case .generic:
-            ["输入任意学校的 HTTPS 教务网址并登录，然后打开课表表格。", "可直接读取当前网页，也支持文字版 PDF、CSV、ICS、HTML、文本及网页格式 XLS。", "先检查本机预览，再选择合并或替换现有课程。"]
+            ["输入任意学校的 HTTPS 教务网址并登录，然后打开课表表格。", "可直接读取当前网页，也支持文字或扫描 PDF、CSV、ICS、HTML、文本及网页格式 XLS。", "先检查本机预览，再选择合并或替换现有课程。"]
         }
     }
 }
