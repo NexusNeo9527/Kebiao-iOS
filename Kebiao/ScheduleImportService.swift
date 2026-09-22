@@ -376,12 +376,36 @@ enum ScheduleImportService {
             if !lines.isEmpty { pages.append(lines.joined(separator: "\n")) }
         }
 
-        let text = pages.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        NSLog("[DEBUG-OCR-PDF] %@", text.replacingOccurrences(of: "\n", with: " | "))
+        let text = normalizedOCRText(pages.joined(separator: "\n"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             throw ScheduleImportError.malformed("扫描 PDF 中没有识别到课表文字，请换用更清晰、方向正确的文件")
         }
         return text
+    }
+
+    private static func normalizedOCRText(_ text: String) -> String {
+        let aliases: [(String, String)] = [
+            ("course name", "course"), ("course", "course"),
+            ("teacher", "teacher"), ("location", "location"),
+            ("weekday", "weekday"), ("section", "section"), ("weeks", "weeks"),
+            ("课程名称", "课程名称"), ("课程名", "课程名称"),
+            ("任课教师", "任课教师"), ("任课老师", "任课教师"),
+            ("上课地点", "上课地点"), ("教学地点", "上课地点"),
+            ("上课时间", "上课时间"), ("课程安排", "上课时间"),
+            ("星期", "星期"), ("节次", "节次"), ("周数", "上课周数")
+        ]
+        let separatorCharacters = CharacterSet.whitespacesAndNewlines
+            .union(CharacterSet(charactersIn: ":：;；|｜-—"))
+        return text.components(separatedBy: .newlines).map { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            for (alias, canonical) in aliases {
+                guard let range = trimmed.range(of: alias, options: [.anchored, .caseInsensitive]) else { continue }
+                let value = trimmed[range.upperBound...].trimmingCharacters(in: separatorCharacters)
+                if !value.isEmpty { return "\(canonical): \(value)" }
+            }
+            return trimmed
+        }.joined(separator: "\n")
     }
 
     private static func decodedText(_ data: Data) -> String? {
