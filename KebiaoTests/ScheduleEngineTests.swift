@@ -282,7 +282,7 @@ final class ScheduleEngineTests: XCTestCase {
         } catch {
             diagnosis = "error=\(error.localizedDescription)"
         }
-        fatalError("[DEBUG-OCR-PDF] \(diagnosis)")
+        XCTFail("[DEBUG-OCR-PDF] \(diagnosis)")
     }
 
     private func makeCourse(startSection: Int, sectionCount: Int) -> Course {
