@@ -57,6 +57,14 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           test
 
+      - name: Print failed test diagnostics
+        if: failure()
+        run: |
+          RESULT_BUNDLE=$(find build/DerivedData/Logs/Test -maxdepth 1 -name '*.xcresult' -print -quit)
+          test -n "$RESULT_BUNDLE"
+          xcrun xcresulttool get test-results summary --path "$RESULT_BUNDLE" --compact
+          xcrun xcresulttool get test-results tests --path "$RESULT_BUNDLE" --compact
+
       - name: Build for iOS Simulator
         run: >-
           xcodebuild
