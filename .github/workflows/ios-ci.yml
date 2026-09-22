@@ -68,6 +68,12 @@ jobs:
             --path "$RESULT_BUNDLE" \
             --test-id 'test://com.apple.xcode/Kebiao/KebiaoTests/ScheduleEngineTests/testPDFImportUsesOCRForImageOnlyTimetable' \
             --compact
+          mkdir -p build/xcresult-attachments
+          xcrun xcresulttool export attachments \
+            --path "$RESULT_BUNDLE" \
+            --output-path build/xcresult-attachments \
+            --test-id 'test://com.apple.xcode/Kebiao/KebiaoTests/ScheduleEngineTests/testPDFImportUsesOCRForImageOnlyTimetable'
+          find build/xcresult-attachments -type f -maxdepth 2 -print -exec sed -n '1,240p' {} \;
 
       - name: Build for iOS Simulator
         run: >-
