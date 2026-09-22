@@ -107,7 +107,14 @@ enum ScheduleImportService {
         } catch ScheduleImportError.emptyResult {
             let reconstructed = courses(fromSeparatedPDFText: text)
             let result = reconstructed.0.isEmpty ? courses(fromLoosePDFText: text) : reconstructed
-            guard !result.0.isEmpty else { throw ScheduleImportError.emptyResult }
+            guard !result.0.isEmpty else {
+                if embeddedText.isEmpty {
+                    throw ScheduleImportError.malformed(
+                        "[DEBUG-OCR-PDF] " + text.replacingOccurrences(of: "\n", with: " | ")
+                    )
+                }
+                throw ScheduleImportError.emptyResult
+            }
             parsed = ScheduleImportPreview(sourceName: sourceName, format: .pdf, courses: result.0, warnings: result.1)
         }
         return ScheduleImportPreview(
