@@ -64,6 +64,10 @@ jobs:
           test -n "$RESULT_BUNDLE"
           xcrun xcresulttool get test-results summary --path "$RESULT_BUNDLE" --compact
           xcrun xcresulttool get test-results tests --path "$RESULT_BUNDLE" --compact
+          xcrun xcresulttool get test-results test-details \
+            --path "$RESULT_BUNDLE" \
+            --test-id 'test://com.apple.xcode/Kebiao/KebiaoTests/ScheduleEngineTests/testPDFImportUsesOCRForImageOnlyTimetable' \
+            --compact
 
       - name: Build for iOS Simulator
         run: >-
