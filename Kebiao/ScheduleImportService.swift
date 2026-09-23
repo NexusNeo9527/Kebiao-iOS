@@ -317,8 +317,10 @@ enum ScheduleImportService {
         return name
     }
 
-    private static func pdfField(_ key: String, in text: String) -> String {
-        let pattern = NSRegularExpression.escapedPattern(for: key) + #"\s*[:：]\s*([^/]+)"#
+    static func pdfField(_ key: String, in text: String) -> String {
+        let nextField = #"(?:周数|周次|地点|教师|校区|教学班|教学组成|课程学时|总学时|学分|考核方式|备注)"#
+        let pattern = NSRegularExpression.escapedPattern(for: key)
+            + #"\s*[:：]\s*(.*?)(?=[/／|｜]|\s*"# + nextField + #"\s*[:：]|$)"#
         guard let expression = try? NSRegularExpression(pattern: pattern),
               let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let range = Range(match.range(at: 1), in: text) else { return "" }
@@ -798,9 +800,17 @@ enum ScheduleImportService {
                 : nil
         })
         if result.isEmpty {
-            let numericTokens = normalized.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap(Int.init)
-            for number in numericTokens where (1...7).contains(number) {
-                result.insert(Weekday.allCases[number - 1])
+            let numericDays = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+            if numericDays.range(of: #"^[1-7](?:\s*[,，、/|;；\s]\s*[1-7])*$"#, options: .regularExpression) != nil {
+                for number in numericDays.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap(Int.init) {
+                    result.insert(Weekday.allCases[number - 1])
+                }
+            } else if let expression = try? NSRegularExpression(pattern: #"周\s*([1-7])(?!\s*[-–—~至到]\s*\d)"#) {
+                for match in expression.matches(in: normalized, range: NSRange(normalized.startIndex..., in: normalized)) {
+                    if let range = Range(match.range(at: 1), in: normalized), let number = Int(normalized[range]) {
+                        result.insert(Weekday.allCases[number - 1])
+                    }
+                }
             }
         }
         return result
