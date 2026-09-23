@@ -207,6 +207,56 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(course.sectionCount, 2)
     }
 
+    func testPDFGridOCRReadsRenderedChineseTimetable() throws {
+        let bounds = CGRect(x: 0, y: 0, width: 842, height: 595)
+        let data = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
+            context.beginPage()
+            let graphics = context.cgContext
+            graphics.setStrokeColor(UIColor.black.cgColor)
+            graphics.setLineWidth(1)
+            for y in [CGFloat(115), CGFloat(185)] {
+                graphics.move(to: CGPoint(x: 22, y: y))
+                graphics.addLine(to: CGPoint(x: 825, y: y))
+            }
+            for x in [CGFloat(22), CGFloat(80), CGFloat(145), CGFloat(350), CGFloat(825)] {
+                graphics.move(to: CGPoint(x: x, y: 115))
+                graphics.addLine(to: CGPoint(x: x, y: 185))
+            }
+            graphics.strokePath()
+            let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 17)]
+            "星期一".draw(at: CGPoint(x: 28, y: 137), withAttributes: attributes)
+            "1-2".draw(at: CGPoint(x: 91, y: 137), withAttributes: attributes)
+            "操作系统".draw(at: CGPoint(x: 155, y: 137), withAttributes: attributes)
+            "周数:2-9周/地点:教学楼A101/教师:张老师".draw(
+                at: CGPoint(x: 356, y: 137), withAttributes: attributes
+            )
+        }
+
+        let preview = try ScheduleImportService.parsePDF(data: data)
+        let course = try XCTUnwrap(preview.courses.first)
+        XCTAssertEqual(preview.format, .pdf)
+        XCTAssertEqual(course.name, "操作系统")
+        XCTAssertEqual(course.weekdays, [.monday])
+        XCTAssertEqual(course.startSection, 1)
+        XCTAssertEqual(course.sectionCount, 2)
+        XCTAssertEqual(course.location, "教学楼A101")
+        XCTAssertEqual(course.teacher, "张老师")
+        XCTAssertTrue(course.isActive(academicWeek: 2))
+        XCTAssertFalse(course.isActive(academicWeek: 10))
+    }
+
+    func testPDFSplitAndEvenWeekRangesStayExact() {
+        let weeks = ScheduleImportService.pdfWeekNumbers("6-14周(双),15-16周")
+        XCTAssertEqual(weeks, Set([6, 8, 10, 12, 14, 15, 16]))
+        var course = makeCourse(startSection: 1, sectionCount: 2)
+        course.startWeek = 6
+        course.endWeek = 16
+        course.activeWeeks = weeks
+        XCTAssertFalse(course.isActive(academicWeek: 7))
+        XCTAssertTrue(course.isActive(academicWeek: 8))
+        XCTAssertTrue(course.isActive(academicWeek: 15))
+    }
+
     private func makeCourse(startSection: Int, sectionCount: Int) -> Course {
         Course(
             name: "测试课程",

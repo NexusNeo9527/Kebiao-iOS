@@ -5,6 +5,7 @@ struct ImportScheduleView: View {
     let store: TimetableStore
     @Environment(\.dismiss) private var dismiss
     @State private var isImporterPresented = false
+    @State private var isLoadingFile = false
     @State private var preview: ScheduleImportPreview?
     @State private var errorMessage: String?
     @State private var pendingMode: TimetableStore.ImportMode?
@@ -20,6 +21,7 @@ struct ImportScheduleView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         introCard
+                        if isLoadingFile { ProgressView("正在识别课表…") }
                         platformPicker
                         portalLoginCard
                         importGuide
@@ -43,11 +45,19 @@ struct ImportScheduleView: View {
             ) { result in
                 switch result {
                 case .success(let url):
-                    do {
-                        preview = try ScheduleImportService.load(url: url)
-                        errorMessage = nil
-                    } catch {
-                        errorMessage = error.localizedDescription
+                    isLoadingFile = true
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        let result = Result { try ScheduleImportService.load(url: url) }
+                        DispatchQueue.main.async {
+                            isLoadingFile = false
+                            switch result {
+                            case .success(let imported):
+                                preview = imported
+                                errorMessage = nil
+                            case .failure(let error):
+                                errorMessage = error.localizedDescription
+                            }
+                        }
                     }
                 case .failure(let error):
                     errorMessage = error.localizedDescription
@@ -300,6 +310,12 @@ struct ImportScheduleView: View {
                         Text("\(course.weekdays.sorted { $0.weekIndex < $1.weekIndex }.map(\.shortName).joined(separator: "、")) · 第\(course.startSection)–\(course.endSection)节")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if preview.format == .pdf {
+                            Text(course.notes?.replacingOccurrences(of: "原始周次：", with: "周次：") ?? "周次待核对")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                     Spacer()
                 }
