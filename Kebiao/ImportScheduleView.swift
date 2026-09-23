@@ -303,7 +303,7 @@ struct ImportScheduleView: View {
                     .background(KebiaoTheme.accent.opacity(0.1), in: Capsule())
             }
 
-            ForEach(preview.courses.prefix(8)) { course in
+            ForEach(preview.courses) { course in
                 HStack(spacing: 10) {
                     Circle().fill(course.color).frame(width: 10, height: 10)
                     VStack(alignment: .leading, spacing: 2) {
@@ -320,14 +320,9 @@ struct ImportScheduleView: View {
                     }
                     Spacer()
                 }
-                if course.id != preview.courses.prefix(8).last?.id { Divider() }
+                if course.id != preview.courses.last?.id { Divider() }
             }
 
-            if preview.courses.count > 8 {
-                Text("另外还有 \(preview.courses.count - 8) 门课程")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
             ForEach(preview.warnings, id: \.self) { warning in
                 Label(warning, systemImage: "exclamationmark.triangle")
                     .font(.caption)

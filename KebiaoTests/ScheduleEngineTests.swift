@@ -191,6 +191,18 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertEqual(course.endWeek, 17)
     }
 
+    func testImportDoesNotInventWeekdaysFromSectionsAndWeeks() {
+        let text = "课程名称,上课时间\n线性代数,第3-4节 1-16周"
+        XCTAssertThrowsError(try ScheduleImportService.parseSchoolText(text))
+    }
+
+    func testImportAcceptsExplicitNumericWeekday() throws {
+        let text = "课程名称,星期,节次\n线性代数,2,3-4"
+        let preview = try ScheduleImportService.parseSchoolText(text)
+        let course = try XCTUnwrap(preview.courses.first)
+        XCTAssertEqual(course.weekdays, [.tuesday])
+    }
+
     func testPDFImportExtractsTextTimetable() throws {
         let bounds = CGRect(x: 0, y: 0, width: 595, height: 842)
         let data = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
@@ -334,6 +346,14 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertFalse(course.isActive(academicWeek: 7))
         XCTAssertTrue(course.isActive(academicWeek: 8))
         XCTAssertTrue(course.isActive(academicWeek: 15))
+    }
+
+    func testPDFFieldsStopAtTheNextLabelWhenOCRLosesSlashes() {
+        let details = "周数:7-12周,14-16周 地点:教学楼A101 教师:张老师"
+        XCTAssertEqual(ScheduleImportService.pdfField("周数", in: details), "7-12周,14-16周")
+        XCTAssertEqual(ScheduleImportService.pdfField("地点", in: details), "教学楼A101")
+        XCTAssertEqual(ScheduleImportService.pdfField("教师", in: details), "张老师")
+        XCTAssertEqual(ScheduleImportService.pdfField("周数", in: "周数:2-9周／地点:教室／教师:王老师"), "2-9周")
     }
 
     private func makeCourse(startSection: Int, sectionCount: Int) -> Course {
