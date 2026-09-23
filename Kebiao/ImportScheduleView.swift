@@ -311,6 +311,12 @@ struct ImportScheduleView: View {
                         Text("\(course.weekdays.sorted { $0.weekIndex < $1.weekIndex }.map(\.shortName).joined(separator: "、")) · 第\(course.startSection)–\(course.endSection)节")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if preview.format == .pdf {
+                            Text(course.notes?.replacingOccurrences(of: "原始周次：", with: "周次：") ?? "周次待核对")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                     Spacer()
                 }

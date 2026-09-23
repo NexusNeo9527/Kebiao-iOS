@@ -49,6 +49,7 @@ struct Course: Identifiable, Codable, Hashable {
     var reminderMinutesBefore: Int?
     var startWeek: Int? = nil
     var endWeek: Int? = nil
+    var activeWeeks: Set<Int>? = nil
     var credits: Double? = nil
     var notes: String? = nil
 
@@ -61,7 +62,8 @@ struct Course: Identifiable, Codable, Hashable {
     var resolvedEndWeek: Int { endWeek ?? 20 }
 
     func isActive(academicWeek: Int) -> Bool {
-        academicWeek >= resolvedStartWeek && academicWeek <= resolvedEndWeek
+        if let activeWeeks { return activeWeeks.contains(academicWeek) }
+        return academicWeek >= resolvedStartWeek && academicWeek <= resolvedEndWeek
     }
 
     mutating func normalize() {
@@ -78,6 +80,9 @@ struct Course: Identifiable, Codable, Hashable {
         }
         if let endWeek {
             self.endWeek = min(30, max(resolvedStartWeek, endWeek))
+        }
+        if let activeWeeks {
+            self.activeWeeks = Set(activeWeeks.filter { (1...30).contains($0) })
         }
         if let credits {
             self.credits = min(20, max(0, credits))

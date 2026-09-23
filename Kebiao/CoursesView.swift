@@ -347,12 +347,12 @@ struct CourseEditorView: View {
     private var startWeekBinding: Binding<Int> {
         Binding(
             get: { draft.resolvedStartWeek },
-            set: { draft.startWeek = $0; draft.endWeek = max($0, draft.resolvedEndWeek) }
+            set: { draft.startWeek = $0; draft.endWeek = max($0, draft.resolvedEndWeek); draft.activeWeeks = nil }
         )
     }
 
     private var endWeekBinding: Binding<Int> {
-        Binding(get: { draft.resolvedEndWeek }, set: { draft.endWeek = $0 })
+        Binding(get: { draft.resolvedEndWeek }, set: { draft.endWeek = $0; draft.activeWeeks = nil })
     }
 
     private var creditsBinding: Binding<String> {
