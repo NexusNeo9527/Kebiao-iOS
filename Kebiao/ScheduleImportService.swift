@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import UIKit
 import Vision
 
 enum ScheduleImportFormat: String, CaseIterable, Identifiable {
@@ -98,24 +99,246 @@ enum ScheduleImportService {
         guard let document = PDFDocument(data: data) else {
             throw ScheduleImportError.malformed("PDF 文件已损坏或受密码保护")
         }
-        let embeddedText = document.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let text = embeddedText.isEmpty ? try recognizedText(in: document) : embeddedText
 
-        let parsed: ScheduleImportPreview
-        do {
-            parsed = try parseSchoolText(text, sourceName: sourceName)
-        } catch ScheduleImportError.emptyResult {
-            let reconstructed = courses(fromSeparatedPDFText: text)
-            let result = reconstructed.0.isEmpty ? courses(fromLoosePDFText: text) : reconstructed
-            guard !result.0.isEmpty else { throw ScheduleImportError.emptyResult }
-            parsed = ScheduleImportPreview(sourceName: sourceName, format: .pdf, courses: result.0, warnings: result.1)
+        let embeddedText = document.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if embeddedText.filter({ $0 == "\u{FFFD}" }).count <= 3,
+           let parsed = parsedPDFText(embeddedText, sourceName: sourceName) {
+            return parsed
         }
-        return ScheduleImportPreview(
-            sourceName: parsed.sourceName,
-            format: .pdf,
-            courses: parsed.courses,
-            warnings: parsed.warnings
-        )
+
+        let grid = recognizePDFPages(document)
+        if !grid.0.isEmpty {
+            return ScheduleImportPreview(
+                sourceName: sourceName,
+                format: .pdf,
+                courses: grid.0,
+                warnings: ["已使用图像识别，请核对课程名、星期、节次和周次"] + grid.1
+            )
+        }
+
+        let recognized = try recognizedText(in: document)
+        if let parsed = parsedPDFText(recognized, sourceName: sourceName) {
+            return parsed
+        }
+        throw ScheduleImportError.emptyResult
+    }
+
+    private static func parsedPDFText(_ text: String, sourceName: String) -> ScheduleImportPreview? {
+        guard !text.isEmpty else { return nil }
+        if let parsed = try? parseSchoolText(text, sourceName: sourceName) {
+            return ScheduleImportPreview(
+                sourceName: sourceName, format: .pdf, courses: parsed.courses, warnings: parsed.warnings
+            )
+        }
+        let reconstructed = courses(fromSeparatedPDFText: text)
+        let result = reconstructed.0.isEmpty ? courses(fromLoosePDFText: text) : reconstructed
+        guard !result.0.isEmpty else { return nil }
+        return ScheduleImportPreview(sourceName: sourceName, format: .pdf, courses: result.0, warnings: result.1)
+    }
+
+    private struct PDFOCRLine {
+        let text: String
+        let y: CGFloat // Distance from the top of the rendered page, from 0 to 1.
+    }
+
+    private static func recognizePDFPages(_ document: PDFDocument) -> ([Course], [String]) {
+        var courses: [Course] = []
+        var warnings: [String] = []
+        var previousDay: Weekday?
+
+        for pageIndex in 0..<document.pageCount {
+            guard let page = document.page(at: pageIndex) else { continue }
+            let bounds = page.bounds(for: .mediaBox)
+            let size = CGSize(width: bounds.width * 3, height: bounds.height * 3)
+            guard let image = page.thumbnail(of: size, for: .mediaBox).cgImage else { continue }
+
+            let dayLines = recognizePDFText(in: image, x: 0.018...0.095)
+                .compactMap { line -> (PDFOCRLine, Weekday)? in
+                    guard line.text.contains("周") || line.text.contains("星期"),
+                          let day = parseWeekdays(line.text).first else { return nil }
+                    return (line, day)
+                }
+            let sectionLines = recognizePDFText(in: image, x: 0.075...0.175)
+                .compactMap { line -> (PDFOCRLine, (Int, Int))? in
+                    guard let section = pdfSectionRange(line.text) else { return nil }
+                    return (line, section)
+                }
+            let nameLines = recognizePDFText(in: image, x: 0.16...0.415)
+                .filter { pdfCourseName($0.text) != nil }
+                .sorted { $0.y < $1.y }
+            let detailLines = recognizePDFText(in: image, x: 0.415...0.985)
+            let rawBoundaries = pdfDayBoundaries(in: image)
+            let flippedBoundaries = rawBoundaries.map { 1 - $0 }.sorted()
+            func labeledRows(_ boundaries: [CGFloat]) -> Int {
+                nameLines.filter { name in
+                    dayLines.contains { pdfBand(at: $0.0.y, boundaries: boundaries) == pdfBand(at: name.y, boundaries: boundaries) }
+                }.count
+            }
+            let boundaries = labeledRows(flippedBoundaries) > labeledRows(rawBoundaries) ? flippedBoundaries : rawBoundaries
+
+            let previousCourseCount = courses.count
+            for nameLine in nameLines {
+                let band = pdfBand(at: nameLine.y, boundaries: boundaries)
+                let sameBandNames = nameLines.filter { pdfBand(at: $0.y, boundaries: boundaries) == band }
+                let position = sameBandNames.firstIndex { $0.y == nameLine.y && $0.text == nameLine.text } ?? 0
+                let lower = position == 0 ? boundaries[band] : (sameBandNames[position - 1].y + nameLine.y) / 2
+                let upper = position + 1 == sameBandNames.count ? boundaries[band + 1] : (nameLine.y + sameBandNames[position + 1].y) / 2
+                let details = detailLines
+                    .filter { $0.y >= lower && $0.y < upper }
+                    .sorted { $0.y < $1.y }
+                    .map(\.text)
+                    .joined(separator: " ")
+                let day = (boundaries.count > 2 ? dayLines.first { pdfBand(at: $0.0.y, boundaries: boundaries) == band }?.1 : nil)
+                    ?? dayLines.min { abs($0.0.y - nameLine.y) < abs($1.0.y - nameLine.y) }?.1
+                    ?? previousDay
+                let sections = sectionLines
+                    .filter { pdfBand(at: $0.0.y, boundaries: boundaries) == band }
+                    .min { abs($0.0.y - nameLine.y) < abs($1.0.y - nameLine.y) }?.1
+
+                guard let day, let sections, let name = pdfCourseName(nameLine.text) else { continue }
+                let weekText = pdfField("周数", in: details)
+                let weeks = pdfWeekNumbers(weekText)
+                let teacher = pdfField("教师", in: details)
+                let location = pdfField("地点", in: details)
+                let colorIndex = name.utf8.reduce(0) { ($0 + Int($1)) % palette.count }
+                courses.append(Course(
+                    name: name,
+                    teacher: teacher,
+                    location: location,
+                    startSection: min(12, max(1, sections.0)),
+                    sectionCount: min(4, max(1, sections.1 - sections.0 + 1)),
+                    weekdays: [day],
+                    colorValue: palette[colorIndex],
+                    startTimeMinutes: nil,
+                    reminderMinutesBefore: 10,
+                    startWeek: weeks.min(),
+                    endWeek: weeks.max(),
+                    activeWeeks: weeks.isEmpty ? nil : weeks,
+                    notes: weekText.isEmpty ? nil : "原始周次：\(weekText)"
+                ))
+                if weeks.isEmpty {
+                    warnings.append("第 \(pageIndex + 1) 页「\(name)」的周次未识别，请在导入后核对")
+                }
+            }
+            previousDay = dayLines.sorted { $0.0.y < $1.0.y }.last?.1 ?? previousDay
+
+            if courses.count == previousCourseCount {
+                // A scanned PDF without a timetable grid may still contain line-based records.
+                let lines = recognizePDFText(in: image, x: 0.02...0.98)
+                    .sorted { $0.y < $1.y }
+                    .map(\.text)
+                    .joined(separator: "\n")
+                if let preview = try? parseSchoolText(lines) {
+                    courses.append(contentsOf: preview.courses)
+                    warnings.append(contentsOf: preview.warnings)
+                } else {
+                    let loose = Self.courses(fromLoosePDFText: lines)
+                    courses.append(contentsOf: loose.0)
+                    warnings.append(contentsOf: loose.1)
+                }
+            }
+        }
+        return (courses, warnings)
+    }
+
+    private static func recognizePDFText(in image: CGImage, x: ClosedRange<CGFloat>) -> [PDFOCRLine] {
+        let left = max(0, Int(CGFloat(image.width) * x.lowerBound))
+        let right = min(image.width, Int(CGFloat(image.width) * x.upperBound))
+        guard right > left,
+              let crop = image.cropping(to: CGRect(x: CGFloat(left), y: 0, width: CGFloat(right - left), height: CGFloat(image.height))) else { return [] }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["zh-Hans", "en-US"]
+        request.usesLanguageCorrection = true
+        request.minimumTextHeight = 0.003
+        let handler = VNImageRequestHandler(cgImage: crop, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return []
+        }
+        return (request.results ?? []).compactMap { observation in
+            guard let candidate = observation.topCandidates(1).first else { return nil }
+            return PDFOCRLine(text: candidate.string, y: 1 - observation.boundingBox.midY)
+        }
+    }
+
+    private static func pdfDayBoundaries(in image: CGImage) -> [CGFloat] {
+        guard image.bitsPerComponent == 8, image.bitsPerPixel >= 24,
+              let provider = image.dataProvider?.data,
+              CFDataGetLength(provider) >= image.bytesPerRow * image.height,
+              let bytes = CFDataGetBytePtr(provider) else { return [0, 1] }
+        let pixelSize = image.bitsPerPixel / 8
+        let left = Int(CGFloat(image.width) * 0.027)
+        let right = Int(CGFloat(image.width) * 0.072)
+        guard right > left else { return [0, 1] }
+        var rules: [CGFloat] = []
+        for y in 0..<image.height {
+            var dark = 0
+            var checked = 0
+            for x in stride(from: left, to: right, by: 3) {
+                let offset = y * image.bytesPerRow + x * pixelSize
+                let brightness = Int(bytes[offset]) + Int(bytes[offset + 1]) + Int(bytes[offset + 2])
+                if brightness < 370 { dark += 1 }
+                checked += 1
+            }
+            if checked > 0 && dark * 10 >= checked * 8 {
+                let normalized = CGFloat(y) / CGFloat(image.height)
+                if let last = rules.last, normalized - last < 0.005 {
+                    rules[rules.count - 1] = (last + normalized) / 2
+                } else {
+                    rules.append(normalized)
+                }
+            }
+        }
+        return ([0] + rules.filter { $0 > 0.01 && $0 < 0.99 } + [1]).sorted()
+    }
+
+    private static func pdfBand(at y: CGFloat, boundaries: [CGFloat]) -> Int {
+        max(0, min(boundaries.count - 2, (boundaries.lastIndex(where: { $0 <= y }) ?? 0)))
+    }
+
+    private static func pdfSectionRange(_ text: String) -> (Int, Int)? {
+        guard let values = capturedIntegers(
+            in: text,
+            pattern: #"^\s*第?\s*(\d{1,2})\s*[-–—~至到]\s*(\d{1,2})\s*节?\s*$"#
+        ), values.count == 2, (1...12).contains(values[0]), (values[0]...12).contains(values[1]) else { return nil }
+        return (values[0], values[1])
+    }
+
+    private static func pdfCourseName(_ text: String) -> String? {
+        let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "★☆◆◇■●·"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name.count >= 2, name.count <= 45,
+              !name.contains("课表"), !name.contains("学号"),
+              !name.contains("周数"), !name.contains("校区"),
+              !name.contains("教师:"), !name.contains("教师：") else { return nil }
+        return name
+    }
+
+    private static func pdfField(_ key: String, in text: String) -> String {
+        let pattern = NSRegularExpression.escapedPattern(for: key) + #"\s*[:：]\s*([^/]+)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return "" }
+        return String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func pdfWeekNumbers(_ text: String) -> Set<Int> {
+        var weeks = Set<Int>()
+        for part in text.replacingOccurrences(of: "，", with: ",").split(separator: ",") {
+            let segment = String(part)
+            let numbers = segment.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap(Int.init)
+            guard let first = numbers.first, (1...30).contains(first) else { continue }
+            let last = min(30, max(first, numbers.dropFirst().first ?? first))
+            let oddOnly = segment.contains("单")
+            let evenOnly = segment.contains("双")
+            for week in first...last where (!oddOnly || week % 2 == 1) && (!evenOnly || week % 2 == 0) {
+                weeks.insert(week)
+            }
+        }
+        return weeks
     }
 
     static func load(url: URL) throws -> ScheduleImportPreview {
