@@ -219,7 +219,7 @@ enum ScheduleImportService {
                     courses.append(contentsOf: preview.courses)
                     warnings.append(contentsOf: preview.warnings)
                 } else {
-                    let loose = courses(fromLoosePDFText: lines)
+                    let loose = Self.courses(fromLoosePDFText: lines)
                     courses.append(contentsOf: loose.0)
                     warnings.append(contentsOf: loose.1)
                 }
