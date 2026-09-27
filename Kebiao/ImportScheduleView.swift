@@ -202,7 +202,7 @@ struct ImportScheduleView: View {
             .dropFirst()
             .first
         let fragmentItems = fragmentQuery.flatMap { query in
-            URLComponents(string: "https://portal.invalid/?\\(query)")?.queryItems
+            URLComponents(string: "https://portal.invalid/?\(query)")?.queryItems
         } ?? []
         let hasOneTimeToken = ((components.queryItems ?? []) + fragmentItems)
             .contains { tokenNames.contains($0.name.lowercased()) }
