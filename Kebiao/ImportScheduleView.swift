@@ -10,8 +10,7 @@ struct ImportScheduleView: View {
     @State private var errorMessage: String?
     @State private var pendingMode: TimetableStore.ImportMode?
     @State private var presentedSheet: ImportInputSheet?
-    @AppStorage("kebiao.school.name") private var schoolName = ""
-    @AppStorage("kebiao.school.portalURL") private var portalAddress = ""
+    @State private var portalAddress = ""
 
     var body: some View {
         NavigationStack {
@@ -35,6 +34,7 @@ struct ImportScheduleView: View {
                     Button("关闭") { dismiss() }
                 }
             }
+            .onAppear(perform: migrateSavedPortalAddress)
             .fileImporter(
                 isPresented: $isImporterPresented,
                 allowedContentTypes: [.pdf, .commaSeparatedText, .json, .calendarEvent, .plainText, .html, .data]
@@ -68,7 +68,7 @@ struct ImportScheduleView: View {
                 case .portal(let url):
                     SchoolPortalLoginView(
                         url: url,
-                        sourceName: schoolName.isEmpty ? (url.host ?? "教务系统") : schoolName,
+                        sourceName: url.host ?? "教务系统",
                         preview: $preview
                     )
                 }
@@ -148,10 +148,6 @@ struct ImportScheduleView: View {
             VStack(alignment: .leading, spacing: 13) {
                 Label("输入教务系统网址", systemImage: "person.badge.key.fill")
                     .font(.headline)
-                TextField("学校名称（选填）", text: $schoolName)
-                    .textContentType(.organizationName)
-                    .padding(12)
-                    .background(KebiaoTheme.background, in: RoundedRectangle(cornerRadius: 12))
                 TextField("教务系统网址，例如 https://jw.example.edu.cn", text: $portalAddress)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
@@ -160,7 +156,10 @@ struct ImportScheduleView: View {
                     .padding(12)
                     .background(KebiaoTheme.background, in: RoundedRectangle(cornerRadius: 12))
                 Button {
-                    if let portalURL { presentedSheet = .portal(portalURL) }
+                    if let portalURL {
+                        portalAddress = portalURL.absoluteString
+                        presentedSheet = .portal(portalURL)
+                    }
                 } label: {
                     Label("打开并登录", systemImage: "safari")
                         .frame(maxWidth: .infinity)
@@ -170,7 +169,7 @@ struct ImportScheduleView: View {
                 .buttonBorderShape(.roundedRectangle(radius: 14))
                 .tint(KebiaoTheme.accent)
                 .disabled(portalURL == nil)
-                Text("账号和密码直接提交给学校网页，App 不会保存。登录后打开个人课表，再点“读取当前课表”。验证码、统一身份认证和校园 VPN 仍由学校系统处理。")
+                Text("填写学校提供的固定入口网址。登录后打开个人课表，再点“读取当前课表”；账号和密码由学校网页处理。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -180,10 +179,40 @@ struct ImportScheduleView: View {
 
     private var portalURL: URL? {
         let trimmed = portalAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed),
-              url.scheme?.lowercased() == "https",
-              url.host != nil else { return nil }
-        return url
+        guard let components = URLComponents(string: trimmed),
+              components.scheme?.lowercased() == "https",
+              components.host != nil else { return nil }
+        return Self.stablePortalEntry(from: components)
+    }
+
+    private func migrateSavedPortalAddress() {
+        guard let savedAddress = UserDefaults.standard.string(forKey: "kebiao.school.portalURL") else { return }
+        if let components = URLComponents(string: savedAddress),
+           let stableURL = Self.stablePortalEntry(from: components) {
+            portalAddress = stableURL.absoluteString
+        }
+        UserDefaults.standard.removeObject(forKey: "kebiao.school.portalURL")
+    }
+
+    private static func stablePortalEntry(from original: URLComponents) -> URL? {
+        var components = original
+        let tokenNames: Set<String> = ["ticket", "code", "access_token", "id_token", "oauth_token"]
+        let fragmentQuery = components.fragment?
+            .split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+            .dropFirst()
+            .first
+        let fragmentItems = fragmentQuery.flatMap { query in
+            URLComponents(string: "https://portal.invalid/?\\(query)")?.queryItems
+        } ?? []
+        let hasOneTimeToken = ((components.queryItems ?? []) + fragmentItems)
+            .contains { tokenNames.contains($0.name.lowercased()) }
+
+        if hasOneTimeToken {
+            components.path = "/"
+            components.query = nil
+            components.fragment = nil
+        }
+        return components.url
     }
 
     private var supportedFormats: some View {
