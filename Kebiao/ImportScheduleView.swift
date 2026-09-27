@@ -9,7 +9,6 @@ struct ImportScheduleView: View {
     @State private var preview: ScheduleImportPreview?
     @State private var errorMessage: String?
     @State private var pendingMode: TimetableStore.ImportMode?
-    @State private var selectedPlatform: SchoolImportPlatform = .zhengfang
     @State private var presentedSheet: ImportInputSheet?
     @AppStorage("kebiao.school.name") private var schoolName = ""
     @AppStorage("kebiao.school.portalURL") private var portalAddress = ""
@@ -21,9 +20,7 @@ struct ImportScheduleView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         introCard
-                        platformPicker
                         portalLoginCard
-                        importGuide
                         supportedFormats
                         if let preview { previewCard(preview) }
                     }
@@ -67,11 +64,11 @@ struct ImportScheduleView: View {
             .sheet(item: $presentedSheet) { sheet in
                 switch sheet {
                 case .paste:
-                    PasteScheduleView(platform: selectedPlatform, preview: $preview)
+                    PasteScheduleView(preview: $preview)
                 case .portal(let url):
                     SchoolPortalLoginView(
                         url: url,
-                        sourceName: schoolName.isEmpty ? selectedPlatform.title : schoolName,
+                        sourceName: schoolName.isEmpty ? (url.host ?? "教务系统") : schoolName,
                         preview: $preview
                     )
                 }
@@ -112,7 +109,7 @@ struct ImportScheduleView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("从学校导入课表")
                             .font(.headline)
-                        Text("直接登录、PDF、文件或复制文本都可以")
+                        Text("输入学校教务网址，或选择课表文件导入")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -149,7 +146,7 @@ struct ImportScheduleView: View {
     private var portalLoginCard: some View {
         KebiaoCard {
             VStack(alignment: .leading, spacing: 13) {
-                Label("直接登录学校教务系统", systemImage: "person.badge.key.fill")
+                Label("输入教务系统网址", systemImage: "person.badge.key.fill")
                     .font(.headline)
                 TextField("学校名称（选填）", text: $schoolName)
                     .textContentType(.organizationName)
@@ -187,69 +184,6 @@ struct ImportScheduleView: View {
               url.scheme?.lowercased() == "https",
               url.host != nil else { return nil }
         return url
-    }
-
-    private var platformPicker: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("选择教务系统")
-                .font(.headline)
-                .padding(.horizontal, 4)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                ForEach(SchoolImportPlatform.allCases) { platform in
-                    Button {
-                        withAnimation(.snappy) { selectedPlatform = platform }
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: platform.icon)
-                                .frame(width: 24)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(platform.title).font(.subheadline.weight(.semibold))
-                                Text(platform.subtitle).font(.caption2).foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 0)
-                            if selectedPlatform == platform {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(KebiaoTheme.accent)
-                            }
-                        }
-                        .foregroundStyle(.primary)
-                        .padding(13)
-                        .background(
-                            selectedPlatform == platform ? KebiaoTheme.accent.opacity(0.08) : .white,
-                            in: RoundedRectangle(cornerRadius: 15, style: .continuous)
-                        )
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                .stroke(selectedPlatform == platform ? KebiaoTheme.accent.opacity(0.45) : .clear, lineWidth: 1.5)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selectedPlatform == platform ? .isSelected : [])
-                }
-            }
-        }
-    }
-
-    private var importGuide: some View {
-        KebiaoCard {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("\(selectedPlatform.title)导入方法", systemImage: "list.number")
-                    .font(.headline)
-                ForEach(Array(selectedPlatform.steps.enumerated()), id: \.offset) { index, step in
-                    HStack(alignment: .top, spacing: 10) {
-                        Text("\(index + 1)")
-                            .font(.caption.bold())
-                            .foregroundStyle(.white)
-                            .frame(width: 22, height: 22)
-                            .background(KebiaoTheme.accent, in: Circle())
-                        Text(step)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-        }
     }
 
     private var supportedFormats: some View {
@@ -368,51 +302,6 @@ struct ImportScheduleView: View {
     }
 }
 
-enum SchoolImportPlatform: String, CaseIterable, Identifiable {
-    case zhengfang
-    case qiangzhi
-    case qingguo
-    case shuwei
-    case generic
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .zhengfang: "正方教务"
-        case .qiangzhi: "强智教务"
-        case .qingguo: "青果教务"
-        case .shuwei: "树维教务"
-        case .generic: "其他学校"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .zhengfang: "常见新版/旧版"
-        case .qiangzhi: "强智科技"
-        case .qingguo: "青果软件"
-        case .shuwei: "树维信息"
-        case .generic: "通用表格"
-        }
-    }
-
-    var icon: String {
-        self == .generic ? "building.columns" : "graduationcap"
-    }
-
-    var steps: [String] {
-        switch self {
-        case .zhengfang:
-            ["填写学校提供的 HTTPS 教务网址，点“打开并登录”；也可直接选择导出的 PDF。", "登录后进入信息查询或学生课表查询，再点“读取当前课表”。", "检查本机预览，然后选择合并或替换现有课程。"]
-        case .qiangzhi, .qingguo, .shuwei:
-            ["填写学校提供的 HTTPS 教务网址并直接登录。", "打开个人课表后点“读取当前课表”，或下载 PDF、CSV、ICS 再选择文件。", "无法识别的行会单独提示，确认前不会覆盖原课表。"]
-        case .generic:
-            ["输入任意学校的 HTTPS 教务网址并登录，然后打开课表表格。", "可直接读取当前网页，也支持文字或扫描 PDF、CSV、ICS、HTML、文本及网页格式 XLS。", "先检查本机预览，再选择合并或替换现有课程。"]
-        }
-    }
-}
-
 private enum ImportInputSheet: Identifiable {
     case paste
     case portal(URL)
@@ -426,7 +315,6 @@ private enum ImportInputSheet: Identifiable {
 }
 
 private struct PasteScheduleView: View {
-    let platform: SchoolImportPlatform
     @Binding var preview: ScheduleImportPreview?
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
@@ -438,7 +326,7 @@ private struct PasteScheduleView: View {
                 KebiaoTheme.background.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        Text("从 \(platform.title) 的课表页面复制完整表格，或复制每门课程的“课程名、教师、地点、上课时间”字段。")
+                        Text("从教务系统课表页面复制完整表格，或复制每门课程的“课程名、教师、地点、上课时间”字段。")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -487,7 +375,7 @@ private struct PasteScheduleView: View {
 
     private func parse() {
         do {
-            preview = try ScheduleImportService.parseSchoolText(text, sourceName: platform.title)
+            preview = try ScheduleImportService.parseSchoolText(text, sourceName: "粘贴课表")
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
