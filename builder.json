@@ -10,7 +10,8 @@
   "bitrise": {},
   "ios": {
     "path": ".",
-    "scheme": "Kebiao"
+    "scheme": "Kebiao",
+    "configuration": "Release"
   },
   "flutter": {
     "watch": {}

@@ -68,9 +68,9 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           build
 
-      - name: Verify free Sideloadly Live Activity package
+      - name: Verify WidgetKit and Live Activity package
         run: >-
-          bash scripts/verify-free-sideloadly.sh
+          bash scripts/verify-widget-package.sh
           build/DerivedData/Build/Products/Debug-iphonesimulator/Kebiao.app
 
       - name: Capture visual QA screenshots

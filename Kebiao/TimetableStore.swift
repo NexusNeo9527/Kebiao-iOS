@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WidgetKit
 
 @Observable
 final class TimetableStore {
@@ -14,14 +15,19 @@ final class TimetableStore {
     }
 
     init() {
-        defaults = .standard
-        guard let data = defaults.data(forKey: KebiaoConfiguration.storageKey),
+        defaults = UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier) ?? .standard
+        let existingData = defaults.data(forKey: KebiaoConfiguration.storageKey)
+            ?? UserDefaults.standard.data(forKey: KebiaoConfiguration.storageKey)
+        guard let data = existingData,
               let saved = try? JSONDecoder().decode([Course].self, from: data) else {
             courses = Course.samples
             persist()
             return
         }
         courses = saved
+        if defaults.data(forKey: KebiaoConfiguration.storageKey) == nil {
+            persist()
+        }
     }
 
     func courses(on day: Weekday) -> [Course] {
@@ -88,6 +94,7 @@ final class TimetableStore {
     private func persist() {
         guard let data = try? JSONEncoder().encode(courses) else { return }
         defaults.set(data, forKey: KebiaoConfiguration.storageKey)
+        WidgetCenter.shared.reloadAllTimelines()
     }
 }
 
