@@ -183,20 +183,26 @@ struct ScheduleView: View {
     }
 
     private func courseBlocks(dayWidth: CGFloat) -> some View {
-        ForEach(store.courses.filter { $0.isActive(academicWeek: weekNumber) }) { course in
-            ForEach(course.weekdays.sorted(by: { $0.weekIndex < $1.weekIndex })) { day in
+        ForEach(Weekday.allCases) { day in
+            ForEach(coursePlacements(on: day)) { placement in
+                let course = placement.course
+                let laneWidth = dayWidth / CGFloat(placement.laneCount)
+
                 Button {
                     selectedCourse = course
                 } label: {
-                    CourseBlock(course: course)
+                    CourseBlock(course: course, isNarrow: placement.laneCount > 1)
                 }
                 .buttonStyle(.plain)
                 .frame(
-                    width: max(0, dayWidth - 6),
+                    width: max(0, laneWidth - 4),
                     height: CGFloat(course.sectionCount) * sectionHeight - 6
                 )
                 .offset(
-                    x: timeColumnWidth + CGFloat(day.weekIndex) * dayWidth + 3,
+                    x: timeColumnWidth
+                        + CGFloat(day.weekIndex) * dayWidth
+                        + CGFloat(placement.lane) * laneWidth
+                        + 2,
                     y: CGFloat(course.startSection - 1) * sectionHeight + 3
                 )
                 .accessibilityLabel(
@@ -204,6 +210,62 @@ struct ScheduleView: View {
                 )
                 .accessibilityHint("轻点查看课程详情")
             }
+        }
+    }
+
+    private func coursePlacements(on day: Weekday) -> [CoursePlacement] {
+        let courses = store.courses
+            .filter { $0.weekdays.contains(day) && $0.isActive(academicWeek: weekNumber) }
+            .sorted {
+                if $0.startSection == $1.startSection {
+                    return $0.endSection < $1.endSection
+                }
+                return $0.startSection < $1.startSection
+            }
+
+        var placements: [CoursePlacement] = []
+        var overlappingGroup: [Course] = []
+        var groupEndSection = 0
+
+        for course in courses {
+            if !overlappingGroup.isEmpty && course.startSection > groupEndSection {
+                placements.append(contentsOf: lanePlacements(for: overlappingGroup, on: day))
+                overlappingGroup = [course]
+                groupEndSection = course.endSection
+            } else {
+                overlappingGroup.append(course)
+                groupEndSection = max(groupEndSection, course.endSection)
+            }
+        }
+
+        if !overlappingGroup.isEmpty {
+            placements.append(contentsOf: lanePlacements(for: overlappingGroup, on: day))
+        }
+
+        return placements
+    }
+
+    private func lanePlacements(for courses: [Course], on day: Weekday) -> [CoursePlacement] {
+        var laneEndSections: [Int] = []
+        var assignments: [(course: Course, lane: Int)] = []
+
+        for course in courses {
+            let lane = laneEndSections.firstIndex { $0 < course.startSection } ?? laneEndSections.count
+            if lane == laneEndSections.count {
+                laneEndSections.append(course.endSection)
+            } else {
+                laneEndSections[lane] = course.endSection
+            }
+            assignments.append((course, lane))
+        }
+
+        return assignments.map { assignment in
+            CoursePlacement(
+                course: assignment.course,
+                weekday: day,
+                lane: assignment.lane,
+                laneCount: laneEndSections.count
+            )
         }
     }
 
@@ -265,25 +327,32 @@ struct ScheduleView: View {
 
 private struct CourseBlock: View {
     let course: Course
+    var isNarrow = false
+
+    private var isCompact: Bool { isNarrow || course.sectionCount == 1 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(course.name)
-                .font(.system(size: 13, weight: .bold))
-                .lineLimit(3)
+                .font(.system(size: isCompact ? 12 : 13, weight: .bold))
+                .lineLimit(isCompact ? 4 : 3)
+                .layoutPriority(1)
 
-            Text("@ \(course.location)")
-                .font(.system(size: 10, weight: .medium))
-                .lineLimit(3)
+            if !isCompact {
+                Text(course.location.isEmpty ? "未填写地点" : "@ \(course.location)")
+                    .font(.system(size: 10, weight: .medium))
+                    .lineLimit(2)
+                    .layoutPriority(0)
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            Text("\(course.startSection)–\(course.endSection)节")
-                .font(.system(size: 9, weight: .bold))
-                .lineLimit(1)
+                Text("\(course.startSection)–\(course.endSection)节")
+                    .font(.system(size: 9, weight: .bold))
+                    .lineLimit(1)
+            }
         }
         .foregroundStyle(.white)
-        .padding(6)
+        .padding(isCompact ? 4 : 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(course.color, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
@@ -292,6 +361,15 @@ private struct CourseBlock: View {
         }
         .shadow(color: course.color.opacity(0.24), radius: 4, y: 2)
     }
+}
+
+private struct CoursePlacement: Identifiable {
+    let course: Course
+    let weekday: Weekday
+    let lane: Int
+    let laneCount: Int
+
+    var id: String { "\(course.id.uuidString)-\(weekday.rawValue)" }
 }
 
 private struct CourseDetailSheet: View {
