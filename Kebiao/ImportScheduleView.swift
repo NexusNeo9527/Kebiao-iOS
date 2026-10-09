@@ -280,7 +280,8 @@ struct ImportScheduleView: View {
             if let fragment = components.fragment, let separator = fragment.firstIndex(of: "?") {
                 var query = URLComponents()
                 query.queryItems = fragmentItems.filter { !removed.contains($0.name.lowercased()) }
-                components.fragment = String(fragment[..<separator]) + (query.query.map { "?" + $0 } ?? "")
+                components.fragment = String(fragment[..<separator]) +
+                    ((query.queryItems?.isEmpty == false) ? (query.query.map { "?" + $0 } ?? "") : "")
             }
         }
         return components.url
