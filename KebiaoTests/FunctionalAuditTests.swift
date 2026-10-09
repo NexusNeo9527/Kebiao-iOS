@@ -2,6 +2,42 @@ import XCTest
 @testable import Kebiao
 
 final class FunctionalAuditTests: XCTestCase {
+    func testPortalGridUsesCellWeekdayInsteadOfTeacherNameAndPreservesSplitWeeks() throws {
+        let payload = """
+        __KEBIAO_GRID__[{"weekday":"星期二","section":"5-6","text":"操作系统\\n教师：周一老师\\n地点：A103\\n第5-6节 2-14周(双),15-16周"}]
+        """
+        let result = try ScheduleImportService.parseSchoolPortalPayload(payload)
+        let course = try XCTUnwrap(result.courses.first)
+        XCTAssertEqual(course.weekdays, [.tuesday])
+        XCTAssertEqual(course.startSection, 5)
+        XCTAssertEqual(course.sectionCount, 2)
+        XCTAssertEqual(course.teacher, "周一老师")
+        XCTAssertEqual(course.location, "A103")
+        XCTAssertEqual(course.activeWeeks, Set([2, 4, 6, 8, 10, 12, 14, 15, 16]))
+    }
+
+    func testPortalGridSkipsMissingSectionsAndKeepsSeparateCoursesInOneCell() throws {
+        let cells = [
+            ScheduleImportService.TimetableGridCell(weekday: "星期五", section: "", text: "缺少节次\n1-16周"),
+            ScheduleImportService.TimetableGridCell(weekday: "星期五", section: "7-8",
+                text: "算法\n1-9周(单)\n\n英语\n10-16周(双)")
+        ]
+        let result = try ScheduleImportService.parseTimetableGrid(cells, sourceName: "课表", format: .portal)
+        XCTAssertEqual(result.courses.map(\.name), ["算法", "英语"])
+        XCTAssertEqual(result.courses.map(\.startSection), [7, 7])
+        XCTAssertEqual(result.courses[0].activeWeeks, Set([1, 3, 5, 7, 9]))
+        XCTAssertEqual(result.courses[1].activeWeeks, Set([10, 12, 14, 16]))
+        XCTAssertEqual(result.warnings.count, 1)
+    }
+
+    func testPortalEntryRemovesTemporaryCredentialsAndPreservesApplicationRoute() throws {
+        let url = try XCTUnwrap(URLComponents(string: "https://ehall.cqut.edu.cn/new_office_hall/#/personalInfo?ticket=test-ticket&state=null"))
+        let entry = try XCTUnwrap(ImportScheduleView.stablePortalEntry(from: url))
+        XCTAssertEqual(entry.absoluteString, "https://ehall.cqut.edu.cn/new_office_hall/#/personalInfo")
+        let query = try XCTUnwrap(URLComponents(string: "https://school.example/app?ticket=test&semester=1"))
+        XCTAssertEqual(ImportScheduleView.stablePortalEntry(from: query)?.absoluteString,
+                       "https://school.example/app?semester=1")
+    }
     func testImportPreviewKeepsCurrentWeekWhenItContainsCourses() {
         var value = course()
         value.activeWeeks = [2, 4]

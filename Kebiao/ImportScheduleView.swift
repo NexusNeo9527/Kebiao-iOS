@@ -123,6 +123,14 @@ struct ImportScheduleView: View {
                                 }
                             }
                     }
+                case .correction(let course):
+                    ImportCourseCorrectionView(course: course) { corrected in
+                        guard let current = preview else { return }
+                        preview = ScheduleImportPreview(sourceName: current.sourceName, format: current.format,
+                            courses: current.courses.map { $0.id == corrected.id ? corrected : $0 },
+                            warnings: current.warnings)
+                        presentedSheet = nil
+                    }
                 }
             }
             .alert("导入失败", isPresented: Binding(
@@ -200,6 +208,10 @@ struct ImportScheduleView: View {
             VStack(alignment: .leading, spacing: 13) {
                 Label("输入教务系统网址", systemImage: "person.badge.key.fill")
                     .font(.headline)
+                Button("重庆理工大学 · 办事大厅") {
+                    portalAddress = "https://ehall.cqut.edu.cn/new_office_hall/"
+                }
+                .buttonStyle(.bordered)
                 TextField("教务系统网址，例如 https://jw.example.edu.cn", text: $portalAddress)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
@@ -221,7 +233,7 @@ struct ImportScheduleView: View {
                 .buttonBorderShape(.roundedRectangle(radius: 14))
                 .tint(KebiaoTheme.accent)
                 .disabled(portalURL == nil)
-                Text("填写学校提供的固定入口网址。登录后打开个人课表，再点“读取当前课表”；账号和密码由学校网页处理。")
+                Text("登录 → 进入教务系统 → 选择学年学期 → 打开完整个人课表 → 读取课表。重庆理工大学请从办事大厅进入教务系统；个人资料页不是课表。若学校限制访问，请使用校园网络。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -246,7 +258,7 @@ struct ImportScheduleView: View {
         UserDefaults.standard.removeObject(forKey: "kebiao.school.portalURL")
     }
 
-    private static func stablePortalEntry(from original: URLComponents) -> URL? {
+    static func stablePortalEntry(from original: URLComponents) -> URL? {
         var components = original
         let tokenNames: Set<String> = ["ticket", "code", "access_token", "id_token", "oauth_token"]
         let fragmentQuery = components.fragment?
@@ -260,9 +272,16 @@ struct ImportScheduleView: View {
             .contains { tokenNames.contains($0.name.lowercased()) }
 
         if hasOneTimeToken {
-            components.path = "/"
-            components.query = nil
-            components.fragment = nil
+            // Preserve the application entry and SPA route, remove temporary
+            // credentials from both the regular query and hash query.
+            let removed = tokenNames.union(["state"])
+            components.queryItems = components.queryItems?.filter { !removed.contains($0.name.lowercased()) }
+            if components.queryItems?.isEmpty == true { components.queryItems = nil }
+            if let fragment = components.fragment, let separator = fragment.firstIndex(of: "?") {
+                var query = URLComponents()
+                query.queryItems = fragmentItems.filter { !removed.contains($0.name.lowercased()) }
+                components.fragment = String(fragment[..<separator]) + (query.query.map { "?" + $0 } ?? "")
+            }
         }
         return components.url
     }
@@ -374,6 +393,9 @@ struct ImportScheduleView: View {
                         }
                     }
                     Spacer()
+                    Button("校正") { presentedSheet = .correction(course) }
+                        .font(.caption).buttonStyle(.bordered)
+                        .accessibilityLabel("校正\(course.name)的星期、节次和周次")
                 }
                 if course.id != preview.courses.last?.id { Divider() }
             }
@@ -472,12 +494,80 @@ private enum ImportInputSheet: Identifiable {
     case paste
     case portal(URL)
     case timetable(ScheduleImportPreview)
+    case correction(Course)
 
     var id: String {
         switch self {
         case .paste: "paste"
         case .portal(let url): "portal-\(url.absoluteString)"
         case .timetable: "timetable-preview"
+        case .correction(let course): "correction-\(course.id)"
+        }
+    }
+}
+
+private struct ImportCourseCorrectionView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: Course
+    @State private var weeks: String
+    let onSave: (Course) -> Void
+
+    init(course: Course, onSave: @escaping (Course) -> Void) {
+        _draft = State(initialValue: course)
+        _weeks = State(initialValue: course.activeWeeks.map { $0.sorted().map(String.init).joined(separator: ",") }
+            ?? "\(course.resolvedStartWeek)-\(course.resolvedEndWeek)")
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("课程信息") {
+                    TextField("课程名称", text: $draft.name)
+                    TextField("教师", text: $draft.teacher)
+                    TextField("教室", text: $draft.location)
+                }
+                Section("对照原课表校正位置") {
+                    ForEach(Weekday.allCases) { day in
+                        Toggle(day.shortName, isOn: Binding(
+                            get: { draft.weekdays.contains(day) },
+                            set: { if $0 { draft.weekdays.insert(day) } else { draft.weekdays.remove(day) } }
+                        ))
+                    }
+                    Stepper("开始：第 \(draft.startSection) 节", value: $draft.startSection, in: 1...12)
+                        .onChange(of: draft.startSection) { _, value in
+                            draft.sectionCount = min(draft.sectionCount, 13 - value)
+                        }
+                    Stepper("连续 \(draft.sectionCount) 节", value: $draft.sectionCount,
+                            in: 1...min(4, 13 - draft.startSection))
+                }
+                if draft.scheduledDates == nil {
+                    Section("上课周次") {
+                        TextField("例如 1-16周(单),18周", text: $weeks)
+                        Text("支持连续范围、单周、双周和不连续周次。保存后课表预览会立即更新。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("校正导入课程")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        if draft.scheduledDates == nil {
+                            let parsed = ScheduleImportService.pdfWeekNumbers(weeks)
+                            draft.activeWeeks = parsed
+                            draft.startWeek = parsed.min()
+                            draft.endWeek = parsed.max()
+                            draft.notes = "原始周次：\(weeks)"
+                        }
+                        onSave(draft)
+                    }
+                    .disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                              draft.weekdays.isEmpty ||
+                              (draft.scheduledDates == nil && ScheduleImportService.pdfWeekNumbers(weeks).isEmpty))
+                }
+            }
         }
     }
 }

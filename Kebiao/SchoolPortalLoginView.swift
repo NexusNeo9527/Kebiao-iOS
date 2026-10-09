@@ -12,18 +12,33 @@ struct SchoolPortalLoginView: View {
     @State private var isExtracting = false
     @State private var errorMessage: String?
     @State private var frameURLs: [URL] = []
+    @State private var address = ""
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                PortalWebView(webView: webView, url: url, isLoading: $isLoading)
-                    .ignoresSafeArea(edges: .bottom)
-                if isLoading {
-                    ProgressView("正在打开教务系统…")
-                        .padding(18)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            VStack(spacing: 8) {
+                HStack {
+                    TextField("学校网页地址", text: $address)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                        .onSubmit { openAddress() }
+                    Button("前往") { openAddress() }
+                    Button { webView.reload() } label: { Image(systemName: "arrow.clockwise") }
+                        .accessibilityLabel("刷新网页")
+                }
+                .padding(.horizontal)
+                Text("登录后进入教务系统，选择学期并打开完整课表，再点下方读取。")
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal)
+                ZStack {
+                    PortalWebView(webView: webView, url: url, isLoading: $isLoading, errorMessage: $errorMessage)
+                        .ignoresSafeArea(edges: .bottom)
+                    if isLoading {
+                        ProgressView("正在打开教务系统…")
+                            .padding(18)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    }
                 }
             }
+            .onAppear { address = url.absoluteString }
             .navigationTitle(sourceName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -73,6 +88,17 @@ struct SchoolPortalLoginView: View {
         }
     }
 
+    private func openAddress() {
+        guard let components = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
+              components.scheme?.lowercased() == "https", components.host != nil,
+              let entry = ImportScheduleView.stablePortalEntry(from: components) else {
+            errorMessage = "请输入学校提供的 HTTPS 网址。"
+            return
+        }
+        address = entry.absoluteString
+        webView.load(URLRequest(url: entry))
+    }
+
     private func extractCurrentTimetable() {
         isExtracting = true
         webView.evaluateJavaScript(Self.tableExtractionScript) { result, error in
@@ -106,6 +132,8 @@ struct SchoolPortalLoginView: View {
     (() => {
       const clean = value => (value || '').replace(/\s+/g, ' ').trim();
       const tables = [];
+      const gridCells = [];
+      let hasGrid = false;
       const texts = [];
       const frames = new Set();
       const visit = (doc, depth) => {
@@ -115,6 +143,47 @@ struct SchoolPortalLoginView: View {
           return style.display !== 'none' && style.visibility !== 'hidden';
         };
         for (const table of Array.from(doc.querySelectorAll('table')).filter(visible)) {
+          // Expand row/column spans before mapping a weekday column. Empty cells
+          // and merged morning/afternoon labels must not shift course positions.
+          const matrix = [];
+          Array.from(table.rows).forEach((row, r) => {
+            matrix[r] ||= [];
+            let c = 0;
+            for (const cell of Array.from(row.cells)) {
+              while (matrix[r][c]) c++;
+              const entry = { cell, row: r, col: c };
+              const height = Math.max(1, Math.min(100, Number(cell.rowSpan) || 1));
+              const width = Math.max(1, Math.min(100, Number(cell.colSpan) || 1));
+              for (let dy = 0; dy < height; dy++) {
+                matrix[r + dy] ||= [];
+                for (let dx = 0; dx < width; dx++) matrix[r + dy][c + dx] = entry;
+              }
+              c += width;
+            }
+          });
+          const isDay = value => /^(?:星期|周)[一二三四五六日天]$/.test(clean(value));
+          const header = matrix.findIndex(row => row.filter(entry => entry && isDay(entry.cell.innerText)).length >= 2);
+          if (header >= 0) {
+            hasGrid = true;
+            const columns = matrix[header].map(entry => entry && isDay(entry.cell.innerText) ? clean(entry.cell.innerText) : null);
+            const firstDay = columns.findIndex(Boolean);
+            const sectionAt = r => (matrix[r] || []).slice(0, firstDay)
+              .map(entry => clean(entry?.cell.innerText)).find(value => /^(?:第)?\s*\d{1,2}(?:\s*[-–—~至,、]\s*\d{1,2})*\s*(?:节)?$/.test(value)) || '';
+            for (let r = header + 1; r < matrix.length; r++) {
+              for (let c = firstDay; c < columns.length; c++) {
+                const entry = matrix[r]?.[c];
+                if (!columns[c] || !entry || entry.row !== r) continue;
+                const text = (entry.cell.innerText || '').trim();
+                if (!text || isDay(text)) continue;
+                const lastRow = Math.min(matrix.length - 1, r + (Number(entry.cell.rowSpan) || 1) - 1);
+                const firstSection = sectionAt(r), lastSection = sectionAt(lastRow);
+                const numbers = (firstSection + '-' + lastSection).match(/\d+/g)?.map(Number) || [];
+                const section = numbers.length ? Math.min(...numbers) + '-' + Math.max(...numbers) : '';
+                gridCells.push({ weekday: columns[c], section, text });
+              }
+            }
+            continue;
+          }
           const rows = Array.from(table.rows).map(row =>
             Array.from(row.cells).map(cell => clean(cell.innerText)).join('\t')
           ).filter(Boolean);
@@ -129,6 +198,7 @@ struct SchoolPortalLoginView: View {
         }
       };
       visit(document, 0);
+      if (hasGrid) return '__KEBIAO_GRID__' + JSON.stringify(gridCells);
       if (tables.length) return tables.join('\n\n');
       if (frames.size) return '__KEBIAO_FRAMES__' + JSON.stringify(Array.from(frames));
       return texts.join('\n\n');
@@ -140,9 +210,10 @@ private struct PortalWebView: UIViewRepresentable {
     let webView: WKWebView
     let url: URL
     @Binding var isLoading: Bool
+    @Binding var errorMessage: String?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(isLoading: $isLoading)
+        Coordinator(isLoading: $isLoading, errorMessage: $errorMessage)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -157,9 +228,11 @@ private struct PortalWebView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         @Binding private var isLoading: Bool
+        @Binding private var errorMessage: String?
 
-        init(isLoading: Binding<Bool>) {
+        init(isLoading: Binding<Bool>, errorMessage: Binding<String?>) {
             _isLoading = isLoading
+            _errorMessage = errorMessage
         }
 
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
@@ -176,11 +249,17 @@ private struct PortalWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            isLoading = false
+            failed(error)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            failed(error)
+        }
+
+        private func failed(_ error: Error) {
             isLoading = false
+            guard (error as NSError).code != NSURLErrorCancelled else { return }
+            errorMessage = "学校网页打开失败：\(error.localizedDescription) 请检查网络、校园网要求或入口网址，然后刷新重试。"
         }
     }
 }

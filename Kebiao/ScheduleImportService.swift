@@ -106,6 +106,11 @@ enum ScheduleImportService {
     }
 
     static func parseSchoolPortalPayload(_ payload: String, sourceName: String = "学校教务系统") throws -> ScheduleImportPreview {
+        if payload.hasPrefix("__KEBIAO_GRID__") {
+            let data = Data(payload.dropFirst("__KEBIAO_GRID__".count).utf8)
+            let cells = try JSONDecoder().decode([TimetableGridCell].self, from: data)
+            return try parseTimetableGrid(cells, sourceName: sourceName, format: .portal)
+        }
         let parsed: ScheduleImportPreview
         if payload.range(of: #"<\s*(table|tr|td|th)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
             parsed = try parseHTML(payload, sourceName: sourceName)
@@ -118,6 +123,58 @@ enum ScheduleImportService {
             courses: parsed.courses,
             warnings: parsed.warnings
         )
+    }
+
+    struct TimetableGridCell: Codable {
+        let weekday: String
+        let section: String
+        let text: String
+    }
+
+    // Convert positioned browser cells without inferring a weekday from names.
+    static func parseTimetableGrid(_ cells: [TimetableGridCell], sourceName: String,
+                                   format: ScheduleImportFormat) throws -> ScheduleImportPreview {
+        var courses: [Course] = []
+        var warnings: [String] = []
+        for cell in cells {
+            let blocks = cell.text.replacingOccurrences(of: "\r\n", with: "\n")
+                .components(separatedBy: "\n\n")
+            for block in blocks where !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let lines = block.components(separatedBy: .newlines)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                guard let first = lines.first else { continue }
+                let name = first.replacingOccurrences(of: #"^(课程名称|课程名|课程)\s*[:：]\s*"#,
+                                                      with: "", options: .regularExpression)
+                let schedule = lines.dropFirst().joined(separator: " ")
+                guard let sections = sectionRange(schedule) ?? explicitSectionRange(cell.section),
+                      (1...12).contains(sections.0), (sections.0...12).contains(sections.1) else {
+                    warnings.append("「\(name)」的节次不明确，已跳过，请核对原课表")
+                    continue
+                }
+                var record = ["课程名称": name, "星期": cell.weekday,
+                              "节次": "\(sections.0)-\(sections.1)", "上课时间": schedule]
+                // Explicit section text is more precise than a vertically merged cell.
+                for line in lines.dropFirst() {
+                    if let colon = line.firstIndex(where: { $0 == ":" || $0 == "：" }) {
+                        let key = normalizedKey(String(line[..<colon]))
+                        let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+                        if ["教师", "任课教师", "老师", "地点", "上课地点", "教室", "周次", "周数", "上课周数"].contains(key) {
+                            record[key == "周次" ? "上课周数" : key] = value
+                        }
+                    }
+                }
+                guard let parsed = course(from: record) else {
+                    warnings.append("「\(name)」缺少明确的星期或节次，已跳过，请核对原课表")
+                    continue
+                }
+                courses.append(parsed)
+                if parsed.activeWeeks == nil {
+                    warnings.append("「\(name)」的周次未识别，请核对后导入")
+                }
+            }
+        }
+        guard !courses.isEmpty else { throw ScheduleImportError.emptyResult }
+        return ScheduleImportPreview(sourceName: sourceName, format: format, courses: courses, warnings: warnings)
     }
 
     static func parsePDF(data: Data, sourceName: String = "课表.pdf") throws -> ScheduleImportPreview {
