@@ -374,6 +374,37 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertTrue(result.warnings.contains { $0.contains("实践课程") })
     }
 
+    func testAll26SchoolPDFRowsKeepTheirOriginalWeekdayAndSection() throws {
+        let pages: [[String]] = [
++[ "星期一", "1-2", "课程1★", "周数: 2-9周/地点:A101/教师:老师", "课程2☆", "周数: 10-12周,14-16周/地点:A101/教师:老师", "3-4", "课程3★", "周数: 2-12周,14-16周/地点:A101/教师:老师", "星期二", "3-4", "课程4★", "周数: 3-12周,14-16周/地点:A101/教师:老师", "5-6", "课程5★", "周数: 3-6周/地点:A101/教师:老师", "课程6★", "周数: 7-12周,14-16周/地点:A101/教师:老师", "9-10", "课程7☆", "周数: 16周/地点:A101/教师:老师", "星期三", "1-2", "课程8☆", "周数: 3-10周/地点:A101/教师:老师", "课程9☆", "周数: 12-14周(双),15-16周/地点:A101/教师:老师", "3-4", "课程10★", "周数: 2-7周/地点:A101/教师:老师", "课程11★", "周数: 14-16周/地点:A101/教师:老师", "5-6", "课程12★", "周数: 2-12周/地点:A101/教师:老师", "7-8", "课程13★", "周数: 2周/地点:A101/教师:老师", "课程14★", "周数: 3-11周/地点:A101/教师:老师", "课程15☆", "周数: 15-16周/地点:A101/教师:老师", "星期四", "3-4", "课程16☆", "周数: 6-14周(双),15-16周/地点:A101/教师:老师", "5-6", "课程17★", "周数: 14-16周/地点:A101/教师:老师", "7-8", "课程18★", "周数: 2-11周/地点:A101/教师:老师", "课程19★", "周数: 12-14周(双),15-16周/地点:A101/教师:老师", "9-10", "课程20☆", "周数: 4-6周/地点:A101/教师:老师", "星期五", "1-2", "课程21★", "周数: 2-3周/地点:A101/教师:老师", "课程22☆", "周数: 4-12周/地点:A101/教师:老师", "3-4", "课程23☆", "周数: 5-12周/地点:A101/教师:老师", "5-6", "课程24★", "周数: 2-7周/地点:A101/教师:老师" ],
+[ "7-8", "课程25★", "周数: 2-6周/地点:A101/教师:老师", "课程26★", "周数: 8-11周/地点:A101/教师:老师", "实践课程：课程设计/18-19周;" ]
+        ]
+        let result = try XCTUnwrap(ScheduleImportService.parseUnicodeSchoolRows(pages, sourceName: "匿名课表"))
+        XCTAssertEqual(result.courses.count, 26)
+        XCTAssertEqual(result.courses.map(\.startSection),
+            [1, 1, 3, 3, 5, 5, 9, 1, 1, 3, 3, 5, 7, 7, 7, 3, 5, 7, 7, 9, 1, 1, 3, 5, 7, 7])
+        let days: [Weekday] = Array(repeating: .monday, count: 3) + Array(repeating: .tuesday, count: 4) +
+            Array(repeating: .wednesday, count: 8) + Array(repeating: .thursday, count: 5) +
+            Array(repeating: .friday, count: 6)
+        XCTAssertEqual(result.courses.map(\.weekdays), days.map { Set([$0]) })
+        XCTAssertEqual(result.courses[8].activeWeeks, Set([12, 14, 15, 16]))
+        XCTAssertEqual(result.courses[15].activeWeeks, Set([6, 8, 10, 12, 14, 15, 16]))
+        XCTAssertEqual(result.courses[25].activeWeeks, Set([8, 9, 10, 11]))
+        let fridayWeek6 = result.courses.filter { $0.weekdays.contains(.friday) && $0.isActive(academicWeek: 6) }
+        XCTAssertEqual(fridayWeek6.map(\.startSection), [1, 3, 5, 7])
+        XCTAssertEqual(TimetableCourseGroup.groups(fridayWeek6).map { $0.courses.count }, [1, 1, 1, 1])
+        let mondayWeek6 = result.courses.filter { $0.weekdays.contains(.monday) && $0.isActive(academicWeek: 6) }
+        XCTAssertEqual(mondayWeek6.map(\.startSection), [1, 3])
+    }
+
+    func testPartialUnicodeSchoolRowsDoNotBypassFallbackOrInventMissingSections() {
+        let result = ScheduleImportService.parseUnicodeSchoolRows([
+            ["星期一", "1-2", "网络★", "周数:1-16周/地点:A101/教师:老师"],
+            ["没有节次★", "周数:1-16周/地点:A101/教师:老师"]
+        ], sourceName: "课表")
+        XCTAssertNil(result)
+    }
+
     private func unicodeSchoolPDF(_ pages: [[String]]) -> Data {
         let pageIDs = pages.indices.map { 5 + $0 * 2 }
         var objects = [

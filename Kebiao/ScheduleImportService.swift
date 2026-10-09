@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import PDFKit
 import UIKit
 import Vision
@@ -182,6 +183,13 @@ enum ScheduleImportService {
             throw ScheduleImportError.malformed("PDF 文件已损坏或受密码保护")
         }
 
+        // Some school exports use predefined UCS2 CMaps without a ToUnicode
+        // table. Decode their declared Unicode strings before OCR can lose the
+        // row-spanned weekday/section labels in a dense, rotated table.
+        if let exact = parseUnicodeSchoolRows(unicodePDFPages(document), sourceName: sourceName) {
+            return exact
+        }
+
         let embeddedText = document.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if embeddedText.filter({ $0 == "\u{FFFD}" }).count <= 3,
            let parsed = parsedPDFText(embeddedText, sourceName: sourceName) {
@@ -203,6 +211,85 @@ enum ScheduleImportService {
             return parsed
         }
         throw ScheduleImportError.emptyResult
+    }
+
+    private static func unicodePDFPages(_ document: PDFDocument) -> [[String]] {
+        (0..<document.pageCount).map { index in
+            guard let page = document.page(at: index)?.pageRef,
+                  let table = CGPDFOperatorTableCreate() else { return [] }
+            var resources: CGPDFDictionaryRef?
+            var fonts: CGPDFDictionaryRef?
+            if CGPDFDictionaryGetDictionary(page.dictionary, "Resources", &resources), let resources {
+                _ = CGPDFDictionaryGetDictionary(resources, "Font", &fonts)
+            }
+            let collector = PDFUnicodeTextCollector(fonts: fonts)
+            CGPDFOperatorTableSetCallback(table, "Tf", PDFUnicodeTextCollector.selectFont)
+            CGPDFOperatorTableSetCallback(table, "Tj", PDFUnicodeTextCollector.showText)
+            CGPDFOperatorTableSetCallback(table, "TJ", PDFUnicodeTextCollector.showTextArray)
+            let stream = CGPDFContentStreamCreateWithPage(page)
+            let scanner = CGPDFScannerCreate(stream, table, Unmanaged.passUnretained(collector).toOpaque())
+            guard CGPDFScannerScan(scanner) else { return [] }
+            return collector.lines
+        }
+    }
+
+    static func parseUnicodeSchoolRows(_ pages: [[String]], sourceName: String) -> ScheduleImportPreview? {
+        var day: Weekday?
+        var sections: (Int, Int)?
+        var name: String?
+        var details: [String] = []
+        var courses: [Course] = []
+        var warnings: [String] = []
+        var expectedRows = 0
+
+        func flush() {
+            guard let title = name else { return }
+            defer { name = nil; details = [] }
+            let detail = details.joined(separator: " ")
+            guard let day, let sections, detail.contains("周数") else { return }
+            let weekText = pdfField("周数", in: detail)
+            let weeks = pdfWeekNumbers(weekText)
+            guard !weeks.isEmpty else { return }
+            courses.append(Course(name: title, teacher: pdfField("教师", in: detail),
+                location: pdfField("地点", in: detail), startSection: sections.0,
+                sectionCount: min(4, sections.1 - sections.0 + 1), weekdays: [day],
+                colorValue: palette[title.utf8.reduce(0) { ($0 + Int($1)) % palette.count }],
+                startTimeMinutes: nil, reminderMinutesBefore: 10,
+                startWeek: weeks.min(), endWeek: weeks.max(), activeWeeks: weeks,
+                notes: "原始周次：\(weekText)"))
+        }
+
+        for page in pages {
+            for raw in page {
+                let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if line.range(of: #"^(星期|周)[一二三四五六日天]$"#, options: .regularExpression) != nil,
+                   let weekday = parseWeekdays(line).first {
+                    flush()
+                    day = weekday
+                    sections = nil
+                } else if let range = pdfSectionRange(line) {
+                    flush()
+                    sections = range
+                } else if line.hasPrefix("实践课程") {
+                    flush()
+                    warnings.append("PDF 包含未指定星期和节次的实践课程，请按学校安排手动添加")
+                } else if let last = line.last, "★☆◆◇■●".contains(last),
+                          let title = pdfCourseName(line) {
+                    flush()
+                    expectedRows += 1
+                    name = title
+                } else if name != nil {
+                    details.append(line)
+                }
+            }
+            flush()
+            // The next page can continue a merged weekday cell. Keep the day,
+            // but require an explicit new section label before adding a course.
+            sections = nil
+        }
+        // A partial decode must not silently bypass the generic/OCR paths.
+        guard !courses.isEmpty, courses.count == expectedRows else { return nil }
+        return ScheduleImportPreview(sourceName: sourceName, format: .pdf, courses: courses, warnings: warnings)
     }
 
     private static func parsedPDFText(_ text: String, sourceName: String) -> ScheduleImportPreview? {
@@ -1138,5 +1225,60 @@ enum ScheduleImportService {
             }
         }
         return ""
+    }
+}
+
+private final class PDFUnicodeTextCollector {
+    let fonts: CGPDFDictionaryRef?
+    var unicodeFont = false
+    var lines: [String] = []
+
+    init(fonts: CGPDFDictionaryRef?) { self.fonts = fonts }
+
+    private func decode(_ string: CGPDFStringRef) -> String? {
+        guard unicodeFont, let bytes = CGPDFStringGetBytePtr(string) else { return nil }
+        let length = CGPDFStringGetLength(string)
+        guard length > 0, length % 2 == 0 else { return nil }
+        return String(data: Data(bytes: bytes, count: length), encoding: .utf16BigEndian)
+    }
+
+    static let selectFont: CGPDFOperatorCallback = { scanner, info in
+        guard let info else { return }
+        let collector = Unmanaged<PDFUnicodeTextCollector>.fromOpaque(info).takeUnretainedValue()
+        collector.unicodeFont = false
+        var size: CGPDFReal = 0
+        var fontName: UnsafePointer<CChar>?
+        guard CGPDFScannerPopNumber(scanner, &size), CGPDFScannerPopName(scanner, &fontName),
+              let fontName, let fonts = collector.fonts else { return }
+        var font: CGPDFDictionaryRef?
+        var encoding: UnsafePointer<CChar>?
+        guard CGPDFDictionaryGetDictionary(fonts, fontName, &font), let font,
+              CGPDFDictionaryGetName(font, "Encoding", &encoding), let encoding else { return }
+        collector.unicodeFont = ["UniGB-UCS2-H", "UniGB-UCS2-V", "UniGB-UTF16-H", "UniGB-UTF16-V"]
+            .contains(String(cString: encoding))
+    }
+
+    static let showText: CGPDFOperatorCallback = { scanner, info in
+        guard let info else { return }
+        let collector = Unmanaged<PDFUnicodeTextCollector>.fromOpaque(info).takeUnretainedValue()
+        var value: CGPDFStringRef?
+        if CGPDFScannerPopString(scanner, &value), let value, let text = collector.decode(value) {
+            collector.lines.append(text)
+        }
+    }
+
+    static let showTextArray: CGPDFOperatorCallback = { scanner, info in
+        guard let info else { return }
+        let collector = Unmanaged<PDFUnicodeTextCollector>.fromOpaque(info).takeUnretainedValue()
+        var array: CGPDFArrayRef?
+        guard CGPDFScannerPopArray(scanner, &array), let array else { return }
+        var pieces: [String] = []
+        for index in 0..<CGPDFArrayGetCount(array) {
+            var value: CGPDFStringRef?
+            if CGPDFArrayGetString(array, index, &value), let value, let text = collector.decode(value) {
+                pieces.append(text)
+            }
+        }
+        if !pieces.isEmpty { collector.lines.append(pieces.joined()) }
     }
 }
