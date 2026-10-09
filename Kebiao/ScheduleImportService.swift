@@ -219,7 +219,8 @@ enum ScheduleImportService {
                   let table = CGPDFOperatorTableCreate() else { return [] }
             var resources: CGPDFDictionaryRef?
             var fonts: CGPDFDictionaryRef?
-            if CGPDFDictionaryGetDictionary(page.dictionary, "Resources", &resources), let resources {
+            if let dictionary = page.dictionary,
+               CGPDFDictionaryGetDictionary(dictionary, "Resources", &resources), let resources {
                 _ = CGPDFDictionaryGetDictionary(resources, "Font", &fonts)
             }
             let collector = PDFUnicodeTextCollector(fonts: fonts)
