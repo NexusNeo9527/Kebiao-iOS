@@ -106,6 +106,7 @@ struct CourseEditorView: View {
                         if course != nil { managementButtons }
                     }.padding(18).padding(.bottom, 30).disabled(store.isReadOnly)
                 }
+                .accessibilityIdentifier("course-editor-scroll")
             }
             .navigationTitle(course == nil ? "添加课程" : "编辑整门课").navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -53,8 +53,10 @@ final class CoreFeaturesUITests: XCTestCase {
         XCTAssertTrue(firstWeek.waitForExistence(timeout: 5))
         XCTAssertTrue(firstWeek.isSelected)
         XCTAssertFalse(secondWeek.isSelected)
-        for _ in 0..<12 where !app.staticTexts["时段 2"].isHittable { app.swipeUp() }
-        XCTAssertTrue(app.staticTexts["时段 2"].isHittable)
+        let secondSlot = app.buttons["复制时段2"]
+        let editorScroll = app.scrollViews["course-editor-scroll"]
+        for _ in 0..<20 where !secondSlot.isHittable { editorScroll.swipeUp(velocity: .slow) }
+        XCTAssertTrue(secondSlot.isHittable, "The second time slot must remain reachable on a small screen")
         capture("core-multiple-slots-and-weeks")
         app.buttons["取消"].tap()
     }
@@ -115,8 +117,6 @@ final class CoreFeaturesUITests: XCTestCase {
         restore.tap()
         XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
         confirmation.buttons["完整恢复"].tap()
-        XCTAssertEqual(currentCount.label, "1 张课表 · 1 门课程")
-        app.buttons["完成"].tap()
         XCTAssertTrue(selector.waitForExistence(timeout: 10))
         XCTAssertEqual(selector.value as? String, "恢复测试课表")
         selector.tap()

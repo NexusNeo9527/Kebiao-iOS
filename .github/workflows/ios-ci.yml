@@ -75,26 +75,33 @@ jobs:
       - name: Verify core flows on a small iPhone and iPad
         run: |
           set -euo pipefail
+          xcrun simctl shutdown "$SIMULATOR_UDID"
+          QA_STATUS=0
           for DEVICE_TYPE in com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation com.apple.CoreSimulator.SimDeviceType.iPad-Air-11-inch-M3; do
             RUNTIME_ID=$(xcrun simctl list runtimes available -j | jq -r '.runtimes | map(select(.isAvailable == true and .version == "18.5" and (.identifier | contains("iOS")))) | first | .identifier')
             DEVICE_ID=$(xcrun simctl create "Kebiao Core QA" "$DEVICE_TYPE" "$RUNTIME_ID")
             xcrun simctl boot "$DEVICE_ID"
             xcrun simctl bootstatus "$DEVICE_ID" -b
             LABEL=${DEVICE_TYPE##*.}
+            TEST_STATUS=0
             xcodebuild -project Kebiao.xcodeproj -scheme Kebiao -sdk iphonesimulator \
               -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath build/DerivedData \
               -resultBundlePath "build/Core-$LABEL.xcresult" -only-testing:KebiaoUITests/CoreFeaturesUITests \
-              CODE_SIGNING_ALLOWED=NO test
+              CODE_SIGNING_ALLOWED=NO test || TEST_STATUS=$?
             xcrun xcresulttool export attachments --path "build/Core-$LABEL.xcresult" --output-path "build/visual-qa/$LABEL"
             xcrun simctl shutdown "$DEVICE_ID"
+            if [ "$TEST_STATUS" -ne 0 ]; then QA_STATUS=$TEST_STATUS; fi
           done
+          exit "$QA_STATUS"
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: Kebiao-test-results
-          path: build/TestResults.xcresult
+          path: |
+            build/TestResults.xcresult
+            build/Core-*.xcresult
           if-no-files-found: ignore
           retention-days: 7
 

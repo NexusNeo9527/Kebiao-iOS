@@ -78,7 +78,7 @@ struct AppView: View {
             Task {
                 let timetable = store.activeTimetable
                 await ReminderScheduler.shared.reschedule(timetable: timetable)
-                guard store.activeTimetableID == timetable.id else { return }
+                guard store.activeTimetable == timetable else { return }
                 await LiveActivityCoordinator.refresh(timetable: timetable)
             }
         }

@@ -159,11 +159,11 @@ struct DayScheduleView: View {
             HStack(spacing: 16) {
                 VStack(alignment: .trailing, spacing: 6) {
                     Text(timeText(occurrence.startDate))
-                    Text(timeText(occurrence.endDate))
+                    Text(endTimeText(occurrence))
                 }
                 .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .frame(width: 48)
+                .frame(width: calendar.isDate(occurrence.startDate, inSameDayAs: occurrence.endDate) ? 48 : 80)
 
                 Capsule()
                     .fill(occurrence.course.color)
@@ -218,6 +218,19 @@ struct DayScheduleView: View {
                     LabeledContent("教师", value: occurrence.teacher.isEmpty ? "未填写" : occurrence.teacher)
                     LabeledContent("教室", value: locationText(occurrence))
                 }
+                if let course = store.timetable(id: occurrence.timetableID)?.courses.first(where: { $0.id == occurrence.courseID }) {
+                    Section("全部上课周次") {
+                        ForEach(Array(course.timeSlots.enumerated()), id: \.element.id) { index, slot in
+                            LabeledContent("时段 \(index + 1)", value: CourseScheduleText.weeks(for: slot))
+                        }
+                    }
+                    if course.credits != nil || course.notes?.isEmpty == false {
+                        Section("课程资料") {
+                            if let credits = course.credits { LabeledContent("学分", value: credits.formatted()) }
+                            if let notes = course.notes, !notes.isEmpty { LabeledContent("备注", value: notes) }
+                        }
+                    }
+                }
                 Section {
                     Button("仅调整本次安排") { presentedSheet = .adjust(occurrence) }
                     Button("编辑整门课程") {
@@ -240,7 +253,11 @@ struct DayScheduleView: View {
     private func locationText(_ occurrence: CourseOccurrence) -> String {
         occurrence.location.isEmpty ? "暂未填写教室" : occurrence.location
     }
-    private func timeRange(_ occurrence: CourseOccurrence) -> String { "\(timeText(occurrence.startDate))–\(timeText(occurrence.endDate))" }
+    private func timeRange(_ occurrence: CourseOccurrence) -> String { "\(timeText(occurrence.startDate))–\(endTimeText(occurrence))" }
+    private func endTimeText(_ occurrence: CourseOccurrence) -> String {
+        let pattern = calendar.isDate(occurrence.startDate, inSameDayAs: occurrence.endDate) ? "HH:mm" : "M/d HH:mm"
+        return formatted(occurrence.endDate, pattern: pattern)
+    }
     private func timeText(_ date: Date) -> String { formatted(date, pattern: "HH:mm") }
     private var dateTitle: String { formatted(selectedDate, pattern: "yyyy/M/d") }
     private func formatted(_ date: Date, pattern: String) -> String {
