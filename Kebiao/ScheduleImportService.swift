@@ -49,7 +49,7 @@ enum ScheduleImportService {
         let separator: Character? = nonemptyLines.first?.contains("\t") == true ? "\t" : (nonemptyLines.first?.contains(",") == true ? "," : nil)
         let result: ([Course], [String])
         if let separator {
-            let rows = nonemptyLines.map { $0.split(separator: separator, omittingEmptySubsequences: false).map(String.init) }
+            let rows = separator == "," ? parseCSVRows(normalized) : nonemptyLines.map { $0.split(separator: separator, omittingEmptySubsequences: false).map(String.init) }
             result = courses(fromTabularRows: rows)
         } else {
             result = courses(fromKeyValueText: normalized)
@@ -390,37 +390,22 @@ enum ScheduleImportService {
     }
 
     static func parseCSV(_ data: Data) throws -> ([Course], [String]) {
-        guard let text = decodedText(data) else {
-            throw ScheduleImportError.malformed("无法识别文字编码")
-        }
+        guard let text = decodedText(data) else { throw ScheduleImportError.malformed("无法识别文字编码") }
         let rows = parseCSVRows(text)
-        guard let header = rows.first, header.count > 1 else {
-            throw ScheduleImportError.malformed("缺少表头")
-        }
-
-        let keys = header.map(normalizedKey)
-        var courses: [Course] = []
-        var warnings: [String] = []
-        for (offset, row) in rows.dropFirst().enumerated() where row.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
-            var record: [String: String] = [:]
-            for index in keys.indices where index < row.count {
-                record[keys[index]] = row[index].trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            if let course = course(from: record) {
-                courses.append(course)
-            } else {
-                warnings.append("第 \(offset + 2) 行缺少课程名称或星期，已跳过")
-            }
-        }
-        return (courses, warnings)
+        guard let header = rows.first, header.count > 1 else { throw ScheduleImportError.malformed("缺少表头") }
+        return courses(fromTabularRows: rows)
     }
 
     private static func courses(fromTabularRows rows: [[String]]) -> ([Course], [String]) {
-        guard let header = rows.first, header.count > 1 else { return ([], ["缺少表头"]) }
-        let keys = header.map(normalizedKey)
+        var keys: [String] = []
+        func isCourseHeader(_ row: [String]) -> Bool {
+            row.map(normalizedKey).contains { ["coursename", "course", "name", "课程名称", "课程名", "课程", "科目"].contains($0) }
+        }
         var courses: [Course] = []
         var warnings: [String] = []
-        for (offset, row) in rows.dropFirst().enumerated() where row.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+        for (offset, row) in rows.enumerated() where row.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            if isCourseHeader(row) { keys = row.map(normalizedKey); continue }
+            guard !keys.isEmpty else { continue }
             var record: [String: String] = [:]
             for index in keys.indices where index < row.count {
                 record[keys[index]] = row[index].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -486,7 +471,7 @@ enum ScheduleImportService {
             let location = tokens.first(where: {
                 $0 != name && ($0.contains("楼") || $0.contains("室") || $0.contains("馆") || $0.contains("场"))
             }) ?? ""
-            let weeks = weekRange(line)
+            let weeks = academicWeeks(line, explicitField: false)
             let colorIndex = name.utf8.reduce(0) { ($0 + Int($1)) % palette.count }
             courses.append(Course(
                 name: name,
@@ -498,8 +483,9 @@ enum ScheduleImportService {
                 colorValue: palette[colorIndex],
                 startTimeMinutes: nil,
                 reminderMinutesBefore: 10,
-                startWeek: weeks?.0,
-                endWeek: weeks?.1
+                startWeek: weeks?.min(),
+                endWeek: weeks?.max(),
+                activeWeeks: weeks
             ))
         }
         return (courses, warnings)
@@ -654,6 +640,16 @@ enum ScheduleImportService {
         var courses: [Course] = []
         var warnings: [String] = []
         for (index, object) in objects.enumerated() {
+            if object["id"] != nil && object["colorValue"] != nil {
+                guard let data = try? JSONSerialization.data(withJSONObject: object),
+                      var course = try? JSONDecoder().decode(Course.self, from: data) else {
+                    warnings.append("第 \(index + 1) 条原生课程数据无效，已跳过")
+                    continue
+                }
+                course.normalize()
+                courses.append(course)
+                continue
+            }
             var record: [String: String] = [:]
             for (key, value) in object {
                 record[normalizedKey(key)] = stringValue(value)
@@ -671,42 +667,140 @@ enum ScheduleImportService {
         guard let raw = String(data: data, encoding: .utf8) else {
             throw ScheduleImportError.malformed("ICS 不是 UTF-8 编码")
         }
-        let unfolded = raw.replacingOccurrences(of: "\r\n ", with: "")
-            .replacingOccurrences(of: "\n ", with: "")
-        let blocks = unfolded.components(separatedBy: "BEGIN:VEVENT").dropFirst()
+        let unfolded = raw.replacingOccurrences(of: "\r\n ", with: "").replacingOccurrences(of: "\r\n\t", with: "")
+            .replacingOccurrences(of: "\n ", with: "").replacingOccurrences(of: "\n\t", with: "")
         var courses: [Course] = []
         var warnings: [String] = []
-
-        for (index, block) in blocks.enumerated() {
-            let body = block.components(separatedBy: "END:VEVENT").first ?? block
-            let lines = body.components(separatedBy: .newlines)
-            let summary = icsValue("SUMMARY", in: lines)
-            let location = icsValue("LOCATION", in: lines)
-            let description = icsValue("DESCRIPTION", in: lines)
-            guard !summary.isEmpty, let start = icsDate("DTSTART", in: lines) else {
-                warnings.append("第 \(index + 1) 个日历事件缺少标题或时间，已跳过")
-                continue
+        for (index, block) in unfolded.components(separatedBy: "BEGIN:VEVENT").dropFirst().enumerated() {
+            let lines = (block.components(separatedBy: "END:VEVENT").first ?? block).components(separatedBy: .newlines)
+            if icsValue("STATUS", in: lines).uppercased() == "CANCELLED" { continue }
+            do {
+                guard icsValue("RECURRENCE-ID", in: lines).isEmpty else {
+                    throw ScheduleImportError.malformed("暂不支持改期事件，请导出不含 RECURRENCE-ID 的课表")
+                }
+                let name = icsValue("SUMMARY", in: lines)
+                guard !name.isEmpty, let start = icsDate("DTSTART", in: lines),
+                      let startLine = lines.first(where: { $0.uppercased().hasPrefix("DTSTART") }),
+                      icsValue("DTSTART", in: lines).contains("T") else {
+                    throw ScheduleImportError.malformed("缺少课程名称或带具体时间的 DTSTART，不支持全天课程")
+                }
+                let end = icsDate("DTEND", in: lines) ?? start.addingTimeInterval(50 * 60)
+                guard end > start, end.timeIntervalSince(start) <= 86_400 else {
+                    throw ScheduleImportError.malformed("课程时长必须在 1 分钟到 24 小时之间")
+                }
+                let starts = try icsOccurrences(lines: lines, start: start, startLine: startLine, warnings: &warnings)
+                // Group by local clock time so DST conversions still display the correct time.
+                let groups = Dictionary(grouping: starts) {
+                    Calendar.current.component(.hour, from: $0) * 60 + Calendar.current.component(.minute, from: $0)
+                }
+                let description = icsValue("DESCRIPTION", in: lines)
+                let duration = max(1, Int(end.timeIntervalSince(start) / 60))
+                for minutes in groups.keys.sorted() {
+                    let dates = Set(groups[minutes] ?? [])
+                    guard !dates.isEmpty else { continue }
+                    let section = nearestSection(to: minutes)
+                    let count = min(13 - section, max(1, Int(round(Double(duration) / 55))))
+                    courses.append(Course(
+                        name: name, teacher: teacher(from: description), location: icsValue("LOCATION", in: lines),
+                        startSection: section, sectionCount: count,
+                        weekdays: Set(dates.map { Weekday.from(calendarWeekday: Calendar.current.component(.weekday, from: $0)) }),
+                        colorValue: palette[courses.count % palette.count], startTimeMinutes: minutes, reminderMinutesBefore: 10,
+                        notes: description.isEmpty ? nil : description, scheduledDates: dates, durationMinutes: duration
+                    ))
+                }
+            } catch {
+                warnings.append("第 \(index + 1) 个日历事件已跳过：\(error.localizedDescription)")
             }
-            let end = icsDate("DTEND", in: lines) ?? start.addingTimeInterval(50 * 60)
-            let startMinutes = Calendar.current.component(.hour, from: start) * 60 + Calendar.current.component(.minute, from: start)
-            let duration = max(45, Int(end.timeIntervalSince(start) / 60))
-            let weekdays = icsWeekdays(lines: lines, fallback: start)
-            let startSection = nearestSection(to: startMinutes)
-            let count = min(4, max(1, Int(round(Double(duration) / 50.0))))
-            courses.append(Course(
-                name: summary,
-                teacher: teacher(from: description),
-                location: location,
-                startSection: startSection,
-                sectionCount: min(count, 13 - startSection),
-                weekdays: weekdays,
-                colorValue: palette[courses.count % palette.count],
-                startTimeMinutes: startMinutes,
-                reminderMinutesBefore: 10,
-                notes: description.isEmpty ? nil : description
-            ))
         }
         return (courses, warnings)
+    }
+
+    private static func icsOccurrences(lines: [String], start: Date, startLine: String, warnings: inout [String]) throws -> [Date] {
+        var calendar = Calendar(identifier: .gregorian)
+        if icsValue("DTSTART", in: lines).hasSuffix("Z") { calendar.timeZone = TimeZone(secondsFromGMT: 0)! }
+        else { calendar.timeZone = try icsTimeZone(header: startLine) }
+        calendar.firstWeekday = 2
+        let ruleText = icsValue("RRULE", in: lines).uppercased()
+        var dates: Set<Date> = [start]
+        if !ruleText.isEmpty {
+            var rule: [String: String] = [:]
+            for part in ruleText.split(separator: ";") {
+                let fields = part.split(separator: "=", maxSplits: 1).map(String.init)
+                if fields.count == 2 { rule[fields[0]] = fields[1] }
+            }
+            guard let frequency = rule["FREQ"], ["WEEKLY", "DAILY"].contains(frequency),
+                  Set(rule.keys).isSubset(of: ["FREQ", "INTERVAL", "BYDAY", "COUNT", "UNTIL", "WKST"]),
+                  rule["WKST"] == nil || rule["WKST"] == "MO" else {
+                throw ScheduleImportError.malformed("仅支持按日/周重复及 MO 周起点，复杂规则请转为具体日期")
+            }
+            let interval = Int(rule["INTERVAL"] ?? "1") ?? 0
+            let count = rule["COUNT"].flatMap(Int.init)
+            guard (1...365).contains(interval), rule["COUNT"] == nil || (count ?? 0) > 0,
+                  rule["COUNT"] == nil || rule["UNTIL"] == nil else {
+                throw ScheduleImportError.malformed("重复次数或间隔无效")
+            }
+            let until = rule["UNTIL"].flatMap { parseICSDate($0, header: startLine) }
+            if rule["UNTIL"] != nil && (until == nil || until! < start) { throw ScheduleImportError.malformed("重复结束日期无效或早于开始时间") }
+            let mapping = ["MO": 2, "TU": 3, "WE": 4, "TH": 5, "FR": 6, "SA": 7, "SU": 1]
+            let codes = rule["BYDAY"]?.split(separator: ",").map(String.init) ?? []
+            guard codes.allSatisfy({ mapping[$0] != nil }) else { throw ScheduleImportError.malformed("暂不支持带序号的 BYDAY") }
+            let days = codes.isEmpty ? Set([calendar.component(.weekday, from: start)]) : Set(codes.compactMap { mapping[$0] })
+            let startDay = calendar.startOfDay(for: start)
+            let startWeek = Weekday.monday.date(inWeekContaining: start, calendar: calendar)
+            let parts = calendar.dateComponents([.hour, .minute, .second], from: start)
+            let horizon = calendar.date(byAdding: .day, value: 730, to: start)!
+            let bound = until.map { min($0, horizon) } ?? (count == nil ? calendar.date(byAdding: .day, value: 210, to: start)! : horizon)
+            if count == nil && until == nil { warnings.append("无结束日期的重复课程只导入从开始日期起 30 周，请在下学期重新导入。") }
+            for offset in 1...730 {
+                guard let day = calendar.date(byAdding: .day, value: offset, to: startDay),
+                      let candidate = calendar.date(bySettingHour: parts.hour ?? 0, minute: parts.minute ?? 0, second: parts.second ?? 0, of: day) else { continue }
+                if candidate > bound || (count != nil && dates.count >= count!) { break }
+                let week = Weekday.monday.date(inWeekContaining: candidate, calendar: calendar)
+                let weekIndex = (calendar.dateComponents([.day], from: startWeek, to: week).day ?? 0) / 7
+                let matches = frequency == "DAILY" ? offset % interval == 0 && (codes.isEmpty || days.contains(calendar.component(.weekday, from: candidate)))
+                    : weekIndex % interval == 0 && days.contains(calendar.component(.weekday, from: candidate))
+                if matches { dates.insert(candidate) }
+            }
+            // Include matching days later in the DTSTART week; the daily loop above already does this.
+            if let count, dates.count < count { warnings.append("重复课程超过两年导入范围，仅保留范围内日期。") }
+            if let until, until > horizon { warnings.append("重复课程结束日期超过两年，仅导入两年内日期。") }
+        }
+        for line in lines where line.uppercased().hasPrefix("RDATE") || line.uppercased().hasPrefix("EXDATE") {
+            guard let separator = line.firstIndex(of: ":") else { continue }
+            let isExcluded = line.uppercased().hasPrefix("EXDATE")
+            for value in line[line.index(after: separator)...].split(separator: ",") {
+                guard let date = parseICSDate(String(value), header: line) else { throw ScheduleImportError.malformed("附加或排除日期无效") }
+                if isExcluded { dates.remove(date) } else { dates.insert(date) }
+            }
+        }
+        return dates.sorted()
+    }
+
+    private static func icsTimeZone(header: String) throws -> TimeZone {
+        let parameters = header.components(separatedBy: ":").first?.components(separatedBy: ";") ?? []
+        if let parameter = parameters.first(where: { $0.uppercased().hasPrefix("TZID=") }) {
+            let identifier = String(parameter.dropFirst(5)).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            guard let zone = TimeZone(identifier: identifier) else { throw ScheduleImportError.malformed("无法识别时区 \(identifier)") }
+            return zone
+        }
+        return .current
+    }
+
+    private static func parseICSDate(_ value: String, header: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.isLenient = false
+        formatter.timeZone = value.hasSuffix("Z") ? TimeZone(secondsFromGMT: 0) : (try? icsTimeZone(header: header))
+        if !value.hasSuffix("Z"), (try? icsTimeZone(header: header)) == nil { return nil }
+        let format: String
+        if value.range(of: #"^\d{8}T\d{6}Z$"#, options: .regularExpression) != nil { format = "yyyyMMdd'T'HHmmss'Z'" }
+        else if value.range(of: #"^\d{8}T\d{6}$"#, options: .regularExpression) != nil { format = "yyyyMMdd'T'HHmmss" }
+        else if value.range(of: #"^\d{8}T\d{4}$"#, options: .regularExpression) != nil { format = "yyyyMMdd'T'HHmm" }
+        else if value.range(of: #"^\d{8}$"#, options: .regularExpression) != nil { format = "yyyyMMdd" }
+        else { return nil }
+        formatter.dateFormat = format
+        return formatter.date(from: value)
     }
 
     private static let palette = [0xFF4B68, 0x29B8AF, 0x7B68C8, 0xF29F36, 0x438DDB, 0xE96A42]
@@ -720,14 +814,17 @@ enum ScheduleImportService {
         guard !name.isEmpty, !weekdays.isEmpty else { return nil }
 
         let sectionText = value(in: record, keys: ["startsection", "section", "period", "开始节次", "节次", "开始节数"])
-        let parsedSections = sectionRange(sectionText.isEmpty ? scheduleText : sectionText)
+        let parsedSections = sectionText.isEmpty ? sectionRange(scheduleText)
+            : (sectionText.range(of: #"[-–—~至到节]"#, options: .regularExpression) != nil ? explicitSectionRange(sectionText) : nil)
         let section = parsedSections?.0 ?? intValue(sectionText) ?? 1
         let count = parsedSections.map { $0.1 - $0.0 + 1 } ?? intValue(value(in: record, keys: ["sectioncount", "duration", "节数", "连续节数"])) ?? 2
-        let time = timeMinutes(value(in: record, keys: ["starttime", "time", "开始时间", "上课时间"]))
+        let time = intValue(value(in: record, keys: ["starttimeminutes"])) ?? timeMinutes(value(in: record, keys: ["starttime", "time", "开始时间", "上课时间"]))
         let weekText = value(in: record, keys: ["weeks", "weekrange", "周数", "上课周数"])
-        let weeks = weekRange(weekText.isEmpty ? scheduleText : weekText)
+        let explicitWeeks = value(in: record, keys: ["activeweeks"])
+        let weekNumbers = academicWeeks(explicitWeeks.isEmpty ? (weekText.isEmpty ? scheduleText : weekText) : explicitWeeks,
+                                        explicitField: !explicitWeeks.isEmpty || !weekText.isEmpty)
         let colorIndex = name.utf8.reduce(0) { ($0 + Int($1)) % palette.count }
-        let color = colorValue(value(in: record, keys: ["color", "颜色"])) ?? palette[colorIndex]
+        let color = Int(value(in: record, keys: ["colorvalue"])) ?? colorValue(value(in: record, keys: ["color", "颜色"])) ?? palette[colorIndex]
         return Course(
             name: name,
             teacher: value(in: record, keys: ["teacher", "instructor", "老师", "教师", "任课教师", "任课老师"]),
@@ -737,9 +834,10 @@ enum ScheduleImportService {
             weekdays: weekdays,
             colorValue: color,
             startTimeMinutes: time,
-            reminderMinutesBefore: intValue(value(in: record, keys: ["reminder", "提醒", "提前提醒"])) ?? 10,
-            startWeek: weeks?.0,
-            endWeek: weeks?.1,
+            reminderMinutesBefore: intValue(value(in: record, keys: ["reminderminutesbefore", "reminder", "提醒", "提前提醒"])) ?? 10,
+            startWeek: intValue(value(in: record, keys: ["startweek"])) ?? weekNumbers?.min(),
+            endWeek: intValue(value(in: record, keys: ["endweek"])) ?? weekNumbers?.max(),
+            activeWeeks: weekNumbers,
             credits: Double(value(in: record, keys: ["credits", "credit", "学分"])),
             notes: optional(value(in: record, keys: ["notes", "note", "备注"]))
         )
@@ -849,13 +947,33 @@ enum ScheduleImportService {
         return previous[right.count]
     }
 
-    private static func weekRange(_ text: String) -> (Int, Int)? {
-        if let values = capturedIntegers(in: text, pattern: #"(\d+)\s*[-–—~至到]\s*(\d+)\s*周"#), values.count >= 2 {
+    static func academicWeeks(_ text: String, explicitField: Bool) -> Set<Int>? {
+        let segments = text.replacingOccurrences(of: "，", with: ",").replacingOccurrences(of: "、", with: ",").split(separator: ",")
+        var result = Set<Int>()
+        for segment in segments {
+            let value = String(segment).trimmingCharacters(in: .whitespacesAndNewlines)
+            let rangePattern = explicitField ? #"(\d+)\s*[-–—~至到]\s*(\d+)(?:\s*周)?"# : #"(\d+)\s*[-–—~至到]\s*(\d+)\s*周"#
+            let numbers: [Int]?
+            if let range = capturedIntegers(in: value, pattern: rangePattern) { numbers = range }
+            else if let single = capturedIntegers(in: value, pattern: #"(\d+)\s*周"#) { numbers = single }
+            else if explicitField, let single = Int(value) { numbers = [single] }
+            else { numbers = nil }
+            guard let numbers, let first = numbers.first, (1...30).contains(first) else { continue }
+            let last = min(30, max(first, numbers.dropFirst().first ?? first))
+            for week in first...last where (!value.contains("单") || week % 2 == 1) && (!value.contains("双") || week % 2 == 0) {
+                result.insert(week)
+            }
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    private static func explicitSectionRange(_ text: String) -> (Int, Int)? {
+        if let range = sectionRange(text) { return range }
+        if let values = capturedIntegers(in: text, pattern: #"^\s*(\d+)\s*[-–—~至到]\s*(\d+)\s*$"#), values.count == 2 {
             return (values[0], max(values[0], values[1]))
         }
-        let numbers = text.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap(Int.init)
-        guard let first = numbers.first else { return nil }
-        return (first, max(first, numbers.dropFirst().first ?? first))
+        if let value = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) { return (value, value) }
+        return nil
     }
 
     private static func sectionRange(_ text: String) -> (Int, Int)? {
@@ -922,28 +1040,8 @@ enum ScheduleImportService {
     }
 
     private static func icsDate(_ key: String, in lines: [String]) -> Date? {
-        let value = icsValue(key, in: lines)
-        let formats = ["yyyyMMdd'T'HHmmss'Z'", "yyyyMMdd'T'HHmmss", "yyyyMMdd'T'HHmm", "yyyyMMdd"]
-        for format in formats {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = format
-            formatter.timeZone = format.hasSuffix("'Z'") ? TimeZone(secondsFromGMT: 0) : .current
-            if let date = formatter.date(from: value) { return date }
-        }
-        return nil
-    }
-
-    private static func icsWeekdays(lines: [String], fallback date: Date) -> Set<Weekday> {
-        let rule = icsValue("RRULE", in: lines).uppercased()
-        let mappings: [(String, Weekday)] = [("MO", .monday), ("TU", .tuesday), ("WE", .wednesday), ("TH", .thursday), ("FR", .friday), ("SA", .saturday), ("SU", .sunday)]
-        let byDayValue = rule.components(separatedBy: ";")
-            .first(where: { $0.hasPrefix("BYDAY=") })?
-            .dropFirst("BYDAY=".count) ?? ""
-        let dayCodes = Set(byDayValue.split(separator: ",").map(String.init))
-        let days = Set(mappings.compactMap { dayCodes.contains($0.0) ? $0.1 : nil })
-        if !days.isEmpty { return days }
-        return [Weekday.from(calendarWeekday: Calendar.current.component(.weekday, from: date))]
+        guard let line = lines.first(where: { $0.uppercased().hasPrefix(key + ":") || $0.uppercased().hasPrefix(key + ";") }) else { return nil }
+        return parseICSDate(icsValue(key, in: lines), header: line)
     }
 
     private static func nearestSection(to minutes: Int) -> Int {

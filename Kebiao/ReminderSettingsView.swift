@@ -9,11 +9,19 @@ struct ReminderSettingsView: View {
 
     var body: some View {
         Form {
+            Section("学期设置") {
+                DatePicker("第一周所在日期", selection: Binding(
+                    get: { store.semesterStartDate },
+                    set: { store.semesterStartDate = $0 }
+                ), displayedComponents: .date)
+                Text("选择学校本学期第一周内的任意一天，课表、提醒和小组件会使用同一周次。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             Section {
                 Toggle("启用上课提醒", isOn: $remindersEnabled)
                     .disabled(isRequesting)
             } footer: {
-                Text("开启后会按每门课程设置的提前时间发送本地通知。")
+                Text("按实际周次预排最近 60 次通知，每次打开 App 会补排。请定期打开 App；已排入的通知可离线投递。")
             }
 
             Section("灵动岛与锁屏") {

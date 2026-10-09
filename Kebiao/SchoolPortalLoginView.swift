@@ -11,6 +11,7 @@ struct SchoolPortalLoginView: View {
     @State private var isLoading = true
     @State private var isExtracting = false
     @State private var errorMessage: String?
+    @State private var frameURLs: [URL] = []
 
     var body: some View {
         NavigationStack {
@@ -50,6 +51,17 @@ struct SchoolPortalLoginView: View {
                     .disabled(isLoading || isExtracting)
                 }
             }
+            .confirmationDialog("课表位于独立页面，请选择入口", isPresented: Binding(
+                get: { !frameURLs.isEmpty }, set: { if !$0 { frameURLs = [] } }
+            ), titleVisibility: .visible) {
+                ForEach(frameURLs, id: \.absoluteString) { url in
+                    Button(url.host ?? "打开课表页面") {
+                        webView.load(URLRequest(url: url))
+                        frameURLs = []
+                    }
+                }
+                Button("取消", role: .cancel) { frameURLs = [] }
+            }
             .alert("无法读取课表", isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
@@ -74,6 +86,13 @@ struct SchoolPortalLoginView: View {
                 errorMessage = "当前页面没有可读取的课表。请先登录并打开“学生课表”或“我的课表”页面。"
                 return
             }
+            if payload.hasPrefix("__KEBIAO_FRAMES__") {
+                let json = String(payload.dropFirst("__KEBIAO_FRAMES__".count))
+                let addresses = (try? JSONDecoder().decode([String].self, from: Data(json.utf8))) ?? []
+                frameURLs = addresses.compactMap(URL.init(string:)).filter { $0.scheme == "https" }
+                if frameURLs.isEmpty { errorMessage = "课表位于无法直接访问的框架，请使用学校的独立课表入口或文件导入。" }
+                return
+            }
             do {
                 preview = try ScheduleImportService.parseSchoolPortalPayload(payload, sourceName: sourceName)
                 dismiss()
@@ -83,20 +102,36 @@ struct SchoolPortalLoginView: View {
         }
     }
 
-    private static let tableExtractionScript = #"""
+    static let tableExtractionScript = #"""
     (() => {
       const clean = value => (value || '').replace(/\s+/g, ' ').trim();
-      const visible = element => {
-        const style = window.getComputedStyle(element);
-        return style.display !== 'none' && style.visibility !== 'hidden';
+      const tables = [];
+      const texts = [];
+      const frames = new Set();
+      const visit = (doc, depth) => {
+        if (!doc || depth > 5) return;
+        const visible = element => {
+          const style = doc.defaultView.getComputedStyle(element);
+          return style.display !== 'none' && style.visibility !== 'hidden';
+        };
+        for (const table of Array.from(doc.querySelectorAll('table')).filter(visible)) {
+          const rows = Array.from(table.rows).map(row =>
+            Array.from(row.cells).map(cell => clean(cell.innerText)).join('\t')
+          ).filter(Boolean);
+          if (rows.some(row => /课程名称|课程名|科目|course\s*name/i.test(row))) tables.push(rows.join('\n'));
+        }
+        if (doc.body) texts.push(doc.body.innerText || '');
+        for (const frame of doc.querySelectorAll('iframe, frame')) {
+          try {
+            if (frame.contentDocument && frame.contentDocument.body) visit(frame.contentDocument, depth + 1);
+            else if (frame.src) frames.add(frame.src);
+          } catch (_) { if (frame.src) frames.add(frame.src); }
+        }
       };
-      const tables = Array.from(document.querySelectorAll('table')).filter(visible);
-      if (tables.length > 0) {
-        return tables.map(table => Array.from(table.rows).map(row =>
-          Array.from(row.cells).map(cell => clean(cell.innerText)).join('\t')
-        ).filter(Boolean).join('\n')).filter(Boolean).join('\n\n');
-      }
-      return document.body ? document.body.innerText : '';
+      visit(document, 0);
+      if (tables.length) return tables.join('\n\n');
+      if (frames.size) return '__KEBIAO_FRAMES__' + JSON.stringify(Array.from(frames));
+      return texts.join('\n\n');
     })();
     """#
 }
@@ -112,6 +147,7 @@ private struct PortalWebView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.load(URLRequest(url: url))
         return webView
@@ -119,11 +155,16 @@ private struct PortalWebView: UIViewRepresentable {
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         @Binding private var isLoading: Bool
 
         init(isLoading: Binding<Bool>) {
             _isLoading = isLoading
+        }
+
+        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+            if navigationAction.targetFrame == nil { webView.load(navigationAction.request) }
+            return nil
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {

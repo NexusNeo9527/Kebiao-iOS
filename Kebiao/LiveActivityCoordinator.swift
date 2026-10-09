@@ -1,13 +1,19 @@
 import ActivityKit
 import Foundation
 
+@MainActor
 enum LiveActivityCoordinator {
+    private static var generation = 0
+    private static var previewUntil: Date?
     static func refresh(courses: [Course], at now: Date = .now) async {
+        if let previewUntil, now < previewUntil { return }
+        generation += 1
+        let revision = generation
         guard UserDefaults.standard.bool(forKey: ReminderPreferences.enabledKey),
               ActivityAuthorizationInfo().areActivitiesEnabled,
-              let occurrence = ScheduleEngine.currentOrUpcomingOccurrence(in: courses, at: now),
+              let occurrence = ScheduleEngine.currentOrUpcomingOccurrence(in: courses.filter { $0.reminderMinutesBefore != nil }, at: now),
               let leadTime = occurrence.course.reminderMinutesBefore else {
-            await endAll()
+            await endAll(invalidate: false)
             return
         }
 
@@ -15,40 +21,47 @@ enum LiveActivityCoordinator {
         if now < activityStart {
 #if compiler(>=6.2)
             if #available(iOS 26.0, *) {
-                await schedule(occurrence, at: activityStart)
+                await schedule(occurrence, at: activityStart, revision: revision)
                 return
             }
 #endif
-            await endAll()
+            await endAll(invalidate: false)
             return
         }
 
         guard now < occurrence.endDate else {
-            await endAll()
+            await endAll(invalidate: false)
             return
         }
 
         if Activity<ClassActivityAttributes>.activities.contains(where: {
-            $0.attributes.courseID == occurrence.course.id && $0.attributes.startDate == occurrence.startDate
+            matches($0.attributes, occurrence: occurrence)
         }) {
             return
         }
 
-        await endAll()
+        await endAll(invalidate: false)
+        guard revision == generation else { return }
         start(occurrence)
     }
 
     static func preview(course: Course) async throws {
+        generation += 1
+        let revision = generation
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             throw LiveActivityError.disabled
         }
-        await endAll()
+        await endAll(invalidate: false)
+        guard revision == generation else { return }
         let start = Date.now.addingTimeInterval(5 * 60)
         let end = start.addingTimeInterval(50 * 60)
         try startActivity(course: course, startDate: start, endDate: end)
+        previewUntil = end
     }
 
-    static func endAll() async {
+    static func endAll(invalidate: Bool = true) async {
+        if invalidate { generation += 1 }
+        previewUntil = nil
         for activity in Activity<ClassActivityAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
@@ -87,14 +100,15 @@ enum LiveActivityCoordinator {
 
 #if compiler(>=6.2)
     @available(iOS 26.0, *)
-    private static func schedule(_ occurrence: CourseOccurrence, at activityStart: Date) async {
+    private static func schedule(_ occurrence: CourseOccurrence, at activityStart: Date, revision: Int) async {
         if Activity<ClassActivityAttributes>.activities.contains(where: {
-            $0.attributes.courseID == occurrence.course.id && $0.attributes.startDate == occurrence.startDate
+            matches($0.attributes, occurrence: occurrence)
         }) {
             return
         }
 
-        await endAll()
+        await endAll(invalidate: false)
+        guard revision == generation else { return }
         let course = occurrence.course
         let attributes = ClassActivityAttributes(
             courseID: course.id,
@@ -125,6 +139,14 @@ enum LiveActivityCoordinator {
         )
     }
 #endif
+
+    static func matches(_ attributes: ClassActivityAttributes, occurrence: CourseOccurrence) -> Bool {
+        let course = occurrence.course
+        return attributes.courseID == course.id && attributes.startDate == occurrence.startDate
+            && attributes.endDate == occurrence.endDate && attributes.courseName == course.name
+            && attributes.teacher == course.teacher && attributes.location == course.location
+            && attributes.startSection == course.startSection && attributes.endSection == course.endSection
+    }
 }
 
 enum LiveActivityError: LocalizedError {

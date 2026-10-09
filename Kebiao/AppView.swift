@@ -34,13 +34,19 @@ struct AppView: View {
             .tag(AppTab.reminders)
         }
         .tint(KebiaoTheme.accent)
+        .preferredColorScheme(.light)
         .onOpenURL(perform: handleDeepLink)
         .task {
-            await LiveActivityCoordinator.refresh(courses: store.courses)
+            await ReminderScheduler.shared.reschedule(courses: store.courses)
+            while !Task.isCancelled {
+                if scenePhase == .active { await LiveActivityCoordinator.refresh(courses: store.courses) }
+                try? await Task.sleep(for: .seconds(30))
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task {
+                await ReminderScheduler.shared.reschedule(courses: store.courses)
                 await LiveActivityCoordinator.refresh(courses: store.courses)
             }
         }

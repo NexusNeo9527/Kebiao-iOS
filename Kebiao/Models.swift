@@ -52,6 +52,8 @@ struct Course: Identifiable, Codable, Hashable {
     var activeWeeks: Set<Int>? = nil
     var credits: Double? = nil
     var notes: String? = nil
+    var scheduledDates: Set<Date>? = nil
+    var durationMinutes: Int? = nil
 
     var color: Color { Color(hex: colorValue) }
     var resolvedStartTimeMinutes: Int {
@@ -59,7 +61,10 @@ struct Course: Identifiable, Codable, Hashable {
     }
     var endSection: Int { min(12, startSection + sectionCount - 1) }
     var resolvedStartWeek: Int { startWeek ?? 1 }
-    var resolvedEndWeek: Int { endWeek ?? 20 }
+    var resolvedEndWeek: Int { max(resolvedStartWeek, endWeek ?? 20) }
+    var resolvedDurationMinutes: Int {
+        durationMinutes ?? max(45, sectionCount * 45 + max(0, sectionCount - 1) * 10)
+    }
 
     func isActive(academicWeek: Int) -> Bool {
         if let activeWeeks { return activeWeeks.contains(academicWeek) }
@@ -87,6 +92,7 @@ struct Course: Identifiable, Codable, Hashable {
         if let credits {
             self.credits = min(20, max(0, credits))
         }
+        if let durationMinutes { self.durationMinutes = min(1440, max(1, durationMinutes)) }
     }
 
     static let samples: [Course] = [

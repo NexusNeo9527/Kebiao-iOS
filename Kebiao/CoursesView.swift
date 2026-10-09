@@ -197,6 +197,14 @@ struct CourseEditorView: View {
                     }
                     .font(.subheadline)
                 }
+                .disabled(draft.scheduledDates != nil)
+                if let dates = draft.scheduledDates {
+                    Text("日历课程保留 \(dates.count) 次具体日期，可调整时间；日期变更请重新导入。")
+                        .font(.caption).foregroundStyle(.secondary).padding(.bottom, 10)
+                } else if let weeks = draft.activeWeeks {
+                    Text("精确周次：\(weeks.sorted().map(String.init).joined(separator: "、"))；修改周数后改为连续范围。")
+                        .font(.caption).foregroundStyle(.secondary).padding(.bottom, 10)
+                }
                 Divider()
 
                 VStack(alignment: .leading, spacing: 13) {
@@ -225,6 +233,7 @@ struct CourseEditorView: View {
                     }
                 }
                 .padding(.vertical, 16)
+                .disabled(draft.scheduledDates != nil)
                 Divider()
 
                 editorRow(icon: "clock", title: "节数") {
@@ -237,13 +246,15 @@ struct CourseEditorView: View {
                     }
                     .font(.subheadline)
                 }
+                .onChange(of: draft.sectionCount) { _, _ in draft.durationMinutes = nil }
                 .onChange(of: draft.startSection) { _, _ in
                     draft.sectionCount = min(draft.sectionCount, 13 - draft.startSection)
+                    draft.durationMinutes = nil
                 }
                 Divider()
 
                 editorRow(icon: "pencil.and.outline", title: "自定义时间") {
-                    Toggle("自定义时间", isOn: customTimeEnabled).labelsHidden()
+                    Toggle("自定义时间", isOn: customTimeEnabled).labelsHidden().disabled(draft.scheduledDates != nil)
                 }
                 if draft.startTimeMinutes != nil {
                     DatePicker("开始时间", selection: startTime, displayedComponents: .hourAndMinute)
@@ -390,6 +401,11 @@ struct CourseEditorView: View {
         } set: { date in
             let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
             draft.startTimeMinutes = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+            if let dates = draft.scheduledDates {
+                draft.scheduledDates = Set(dates.compactMap {
+                    Calendar.current.date(bySettingHour: parts.hour ?? 0, minute: parts.minute ?? 0, second: 0, of: $0)
+                })
+            }
         }
     }
 

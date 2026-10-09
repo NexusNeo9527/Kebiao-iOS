@@ -46,6 +46,9 @@ jobs:
           echo "SIMULATOR_UDID=$DEVICE_ID" >> "$GITHUB_ENV"
           echo "Using runtime $RUNTIME_ID on simulator $DEVICE_ID"
 
+      - name: Check portal extraction regressions
+        run: node scripts/verify-portal-extraction.js
+
       - name: Run unit tests
         run: >-
           xcodebuild
@@ -112,3 +115,57 @@ jobs:
           path: build/DerivedData/Build/Products/Debug-iphonesimulator/Kebiao.app
           if-no-files-found: error
           retention-days: 7
+
+  release-build:
+    name: Archive Release with latest stable Xcode
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Archive app and widget
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -project Kebiao.xcodeproj -scheme Kebiao \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath build/Kebiao.xcarchive CODE_SIGNING_ALLOWED=NO archive
+          bash scripts/verify-widget-package.sh build/Kebiao.xcarchive/Products/Applications/Kebiao.app
+      - name: Package and verify unsigned IPA
+        run: |
+          set -euo pipefail
+          APP=build/Kebiao.xcarchive/Products/Applications/Kebiao.app
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
+          mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          (cd build/ipa && zip -rq "Kebiao-$VERSION-unsigned.ipa" Payload)
+          IPA="build/ipa/Kebiao-$VERSION-unsigned.ipa"
+          python3 - "$IPA" "$VERSION" <<'PY'
+          import hashlib, plistlib, sys, zipfile
+          path, version = sys.argv[1:]
+          with zipfile.ZipFile(path) as archive:
+              app = plistlib.loads(archive.read('Payload/Kebiao.app/Info.plist'))
+              widget = plistlib.loads(archive.read('Payload/Kebiao.app/PlugIns/KebiaoWidgetExtension.appex/Info.plist'))
+              assert app['CFBundleShortVersionString'] == widget['CFBundleShortVersionString'] == version
+              assert app['CFBundleVersion'] == widget['CFBundleVersion']
+              assert widget['CFBundleIdentifier'].startswith(app['CFBundleIdentifier'] + '.')
+          with open(path, 'rb') as source:
+              digest = hashlib.sha256(source.read()).hexdigest()
+          with open(path + '.sha256', 'w') as output:
+              output.write(digest + '  ' + path.rsplit('/', 1)[-1] + '\n')
+          print(path, digest)
+          PY
+      - name: Upload verified Release IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: Kebiao-release-ipa
+          path: |
+            build/ipa/*.ipa
+            build/ipa/*.sha256
+          if-no-files-found: error
+          retention-days: 14

@@ -215,7 +215,7 @@ struct ScheduleView: View {
 
     private func coursePlacements(on day: Weekday) -> [CoursePlacement] {
         let courses = store.courses
-            .filter { $0.weekdays.contains(day) && $0.isActive(academicWeek: weekNumber) }
+            .filter { !ScheduleEngine.occurrences(for: $0, on: day.date(inWeekContaining: weekAnchor)).isEmpty }
             .sorted {
                 if $0.startSection == $1.startSection {
                     return $0.endSection < $1.endSection
@@ -283,7 +283,8 @@ struct ScheduleView: View {
     }
 
     private var weekNumber: Int {
-        ScheduleEngine.academicWeekNumber(for: weekAnchor, calendar: calendar)
+        _ = store.semesterStartDate
+        return ScheduleEngine.academicWeekNumber(for: weekAnchor, calendar: calendar)
     }
 
     private var weekRangeText: String {
@@ -419,7 +420,7 @@ private struct CourseDetailSheet: View {
 
     private var timeRangeText: String {
         let start = course.resolvedStartTimeMinutes
-        let duration = max(45, course.sectionCount * 45 + max(0, course.sectionCount - 1) * 10)
+        let duration = course.resolvedDurationMinutes
         let end = start + duration
         return String(
             format: "%02d:%02d–%02d:%02d",

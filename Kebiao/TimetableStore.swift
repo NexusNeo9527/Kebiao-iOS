@@ -3,6 +3,7 @@ import Observation
 import WidgetKit
 
 @Observable
+@MainActor
 final class TimetableStore {
     enum ImportMode {
         case merge
@@ -10,12 +11,19 @@ final class TimetableStore {
     }
 
     private let defaults: UserDefaults
+    var semesterStartDate: Date {
+        didSet {
+            defaults.set(semesterStartDate.timeIntervalSince1970, forKey: KebiaoConfiguration.semesterStartKey)
+            save()
+        }
+    }
     var courses: [Course] = [] {
         didSet { save() }
     }
 
     init() {
         defaults = UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier) ?? .standard
+        semesterStartDate = ScheduleEngine.semesterStart(for: .now)
         let existingData = defaults.data(forKey: KebiaoConfiguration.storageKey)
             ?? UserDefaults.standard.data(forKey: KebiaoConfiguration.storageKey)
         guard let data = existingData,
@@ -24,7 +32,7 @@ final class TimetableStore {
             persist()
             return
         }
-        courses = saved
+        courses = saved.map { value in var course = value; course.normalize(); return course }
         if defaults.data(forKey: KebiaoConfiguration.storageKey) == nil {
             persist()
         }
@@ -32,7 +40,7 @@ final class TimetableStore {
 
     func courses(on day: Weekday) -> [Course] {
         courses.filter { $0.weekdays.contains(day) }
-            .sorted { $0.startSection < $1.startSection }
+            .sorted { $0.resolvedStartTimeMinutes < $1.resolvedStartTimeMinutes }
     }
 
     func save(_ course: Course) {
@@ -98,12 +106,17 @@ final class TimetableStore {
     }
 }
 
-private struct CourseSignature: Equatable {
+struct CourseSignature: Equatable {
     let name: String
     let teacher: String
     let location: String
     let startSection: Int
     let weekdays: Set<Weekday>
+    let sectionCount: Int
+    let startMinutes: Int
+    let weeks: Set<Int>
+    let scheduledDates: Set<Date>?
+    let duration: Int
 
     init(_ course: Course) {
         name = course.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -111,5 +124,10 @@ private struct CourseSignature: Equatable {
         location = course.location.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         startSection = course.startSection
         weekdays = course.weekdays
+        sectionCount = course.sectionCount
+        startMinutes = course.resolvedStartTimeMinutes
+        weeks = Set((1...30).filter { course.isActive(academicWeek: $0) })
+        scheduledDates = course.scheduledDates
+        duration = course.resolvedDurationMinutes
     }
 }
