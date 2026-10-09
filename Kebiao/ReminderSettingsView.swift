@@ -28,7 +28,7 @@ struct ReminderSettingsView: View {
                 Text("按实际周次预排最近 60 次通知，每次打开 App 会补排。通知和下方实时活动可以分别开启。")
             }
 
-            Section("灵动岛与锁屏") {
+            Section {
                 Toggle("自动显示课程实时活动", isOn: $liveActivitiesEnabled)
                     .disabled(isStartingActivity)
                     .accessibilityIdentifier("live-activity-toggle")
@@ -71,6 +71,8 @@ struct ReminderSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+            } header: {
+                Text("灵动岛与锁屏")
             } footer: {
                 Text("打开 App 时，会显示当天 6 小时内的当前或下一门课；通知关闭也可使用。返回主屏查看计时，长按灵动岛查看教室。无灵动岛的设备显示锁屏实时活动。没有临近课程时可点预览。")
             }
