@@ -2,6 +2,33 @@ import XCTest
 @testable import Kebiao
 
 final class FunctionalAuditTests: XCTestCase {
+    func testFourOverlappingCoursesStayInOneGroupWithoutLosingCourses() {
+        let courses = (0..<4).map { _ in course() }
+        let groups = TimetableCourseGroup.groups(courses)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(Set(groups[0].courses.map(\.id)), Set(courses.map(\.id)))
+        XCTAssertEqual(groups[0].startSection, 1)
+        XCTAssertEqual(groups[0].endSection, 2)
+    }
+
+    func testTransitiveOverlapKeepsBoundsAndAdjacentPeriodsSeparate() {
+        var first = course()
+        first.sectionCount = 3
+        var middle = course()
+        middle.startSection = 3
+        middle.sectionCount = 3
+        var last = course()
+        last.startSection = 5
+        var adjacent = course()
+        adjacent.startSection = 7
+        let groups = TimetableCourseGroup.groups([adjacent, last, first, middle])
+        XCTAssertEqual(groups.map { $0.courses.count }, [3, 1])
+        XCTAssertEqual(groups[0].startSection, 1)
+        XCTAssertEqual(groups[0].endSection, 6)
+        XCTAssertEqual(groups[1].startSection, 7)
+        XCTAssertTrue(TimetableCourseGroup.groups([]).isEmpty)
+    }
+
     private var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
         value.timeZone = TimeZone(secondsFromGMT: 0)!

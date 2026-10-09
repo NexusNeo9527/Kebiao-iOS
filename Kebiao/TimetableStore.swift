@@ -24,6 +24,18 @@ final class TimetableStore {
     init() {
         defaults = UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier) ?? .standard
         semesterStartDate = ScheduleEngine.semesterStart(for: .now)
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-overlap") {
+            courses = (0..<4).map { index in
+                Course(name: ["轻量级应用开发", "管理学", "算法分析", "操作系统基础"][index],
+                       teacher: "测试教师", location: "弘远楼 A0301", startSection: 1,
+                       sectionCount: 2, weekdays: [.monday], colorValue: 0x5477D9,
+                       startTimeMinutes: 480, reminderMinutesBefore: nil,
+                       startWeek: 1, endWeek: 30)
+            }
+            return
+        }
+        #endif
         let existingData = defaults.data(forKey: KebiaoConfiguration.storageKey)
             ?? UserDefaults.standard.data(forKey: KebiaoConfiguration.storageKey)
         guard let data = existingData,
