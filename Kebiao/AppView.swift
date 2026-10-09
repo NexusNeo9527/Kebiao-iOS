@@ -4,6 +4,7 @@ struct AppView: View {
     let store: TimetableStore
     @State private var selectedTab: AppTab = {
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--ui-test-live-activity") { return .reminders }
         if arguments.contains("--ui-test-overlap") { return .schedule }
         return arguments.contains("--ui-test-add-course") || arguments.contains(where: { $0.hasPrefix("--ui-test-import") }) ? .courses : .day
     }()

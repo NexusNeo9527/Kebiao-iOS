@@ -25,6 +25,16 @@ final class TimetableStore {
         defaults = UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier) ?? .standard
         semesterStartDate = ScheduleEngine.semesterStart(for: .now)
         #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-live-activity") {
+            UserDefaults.standard.set(true, forKey: LiveActivityPreferences.enabledKey)
+            UserDefaults.standard.set(false, forKey: ReminderPreferences.enabledKey)
+            let start = Date.now.addingTimeInterval(5 * 60)
+            courses = [Course(name: "灵动岛测试课程", teacher: "测试教师", location: "A301",
+                startSection: 5, sectionCount: 2, weekdays: [.friday], colorValue: 0x5477D9,
+                startTimeMinutes: 840, reminderMinutesBefore: nil,
+                scheduledDates: [start], durationMinutes: 50)]
+            return
+        }
         if ProcessInfo.processInfo.arguments.contains("--ui-test-overlap") {
             courses = (0..<4).map { index in
                 Course(name: ["轻量级应用开发", "管理学", "算法分析", "操作系统基础"][index],

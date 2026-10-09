@@ -49,7 +49,10 @@ jobs:
       - name: Check portal extraction regressions
         run: node scripts/verify-portal-extraction.js
 
-      - name: Run unit tests
+      - name: Check school browser identity regressions
+        run: node scripts/verify-portal-browser.js
+
+      - name: Run unit and Live Activity UI tests
         run: >-
           xcodebuild
           -project Kebiao.xcodeproj
@@ -57,8 +60,26 @@ jobs:
           -sdk iphonesimulator
           -destination "platform=iOS Simulator,id=$SIMULATOR_UDID"
           -derivedDataPath build/DerivedData
+          -resultBundlePath build/TestResults.xcresult
           CODE_SIGNING_ALLOWED=NO
           test
+
+      - name: Export Live Activity UI screenshots
+        if: always()
+        run: |
+          if [ -d build/TestResults.xcresult ]; then
+            mkdir -p build/visual-qa
+            xcrun xcresulttool export attachments --path build/TestResults.xcresult --output-path build/visual-qa
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Kebiao-test-results
+          path: build/TestResults.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Build for iOS Simulator
         run: >-
@@ -116,10 +137,11 @@ jobs:
           xcrun simctl io "$DEVICE_ID" screenshot build/visual-qa/pdf-import-complete.png
 
       - name: Upload visual QA screenshots
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: Kebiao-visual-qa
-          path: build/visual-qa/*.png
+          path: build/visual-qa
           if-no-files-found: error
           retention-days: 7
 

@@ -21,8 +21,9 @@ struct SchoolPortalLoginView: View {
                     TextField("学校网页地址", text: $address)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                         .onSubmit { openAddress() }
-                    Button("前往") { openAddress() }
+                    Button("前往") { openAddress() }.disabled(isLoading)
                     Button { webView.reload() } label: { Image(systemName: "arrow.clockwise") }
+                        .disabled(isLoading)
                         .accessibilityLabel("刷新网页")
                 }
                 .padding(.horizontal)
@@ -89,6 +90,7 @@ struct SchoolPortalLoginView: View {
     }
 
     private func openAddress() {
+        guard !isLoading else { return }
         guard let components = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
               components.scheme?.lowercased() == "https", components.host != nil,
               let entry = ImportScheduleView.stablePortalEntry(from: components) else {
@@ -206,6 +208,44 @@ struct SchoolPortalLoginView: View {
     """#
 }
 
+// The CQUT portal derives equipmentName from its browser classifier and sends
+// it when exchanging the SSO ticket. A bare WKWebView UA has no browser token,
+// so that required field is omitted. Keep WebKit's device/OS identity and add
+// the Safari-compatible tokens before the first page can run its classifier.
+enum SchoolPortalBrowser {
+    @MainActor
+    static func prepare(_ webView: WKWebView, completion: @escaping (Result<Void, Error>) -> Void) {
+        webView.evaluateJavaScript(browserIdentityScript) { value, error in
+            if let error {
+                completion(.failure(error))
+                return
+            }
+            guard let userAgent = value as? String, !userAgent.isEmpty else {
+                completion(.failure(BrowserIdentityError.unavailable))
+                return
+            }
+            webView.customUserAgent = userAgent
+            completion(.success(()))
+        }
+    }
+
+    static let browserIdentityScript = #"""
+    (() => {
+      const ua = navigator.userAgent || '';
+      if (!ua || /\b(?:Safari|Chrome|CriOS|Firefox|FxiOS|Edge|Opera|OPR)\//.test(ua)) return ua;
+      const ios = ua.match(/(?:CPU(?: iPhone)? OS|iPhone OS) (\d+)(?:_(\d+))?/);
+      const version = ios ? ' Version/' + ios[1] + '.' + (ios[2] || '0') : '';
+      return ua + version + ' Safari/604.1';
+    })();
+    """#
+
+    private enum BrowserIdentityError: LocalizedError {
+        case unavailable
+
+        var errorDescription: String? { "浏览器信息初始化失败，请关闭导入页面后重新打开。" }
+    }
+}
+
 private struct PortalWebView: UIViewRepresentable {
     let webView: WKWebView
     let url: URL
@@ -220,7 +260,7 @@ private struct PortalWebView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
-        webView.load(URLRequest(url: url))
+        context.coordinator.loadInitialPage(url: url, in: webView)
         return webView
     }
 
@@ -233,6 +273,20 @@ private struct PortalWebView: UIViewRepresentable {
         init(isLoading: Binding<Bool>, errorMessage: Binding<String?>) {
             _isLoading = isLoading
             _errorMessage = errorMessage
+        }
+
+        @MainActor
+        func loadInitialPage(url: URL, in webView: WKWebView) {
+            isLoading = true
+            SchoolPortalBrowser.prepare(webView) { [weak self, weak webView] result in
+                guard let self, let webView else { return }
+                switch result {
+                case .success:
+                    webView.load(URLRequest(url: url))
+                case .failure(let error):
+                    self.failed(error)
+                }
+            }
         }
 
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
