@@ -80,6 +80,66 @@ final class TimetablePersistenceTests: XCTestCase {
         XCTAssertEqual(defaults.data(forKey: KebiaoConfiguration.collectionStorageKey), data)
     }
 
+    @MainActor func testMergeImportRetainsReminderAndSharedMetadataDifferences() {
+        let (defaults, name) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = TimetableStore(defaults: defaults, performsSystemUpdates: false)
+        let original = Course(name: "算法", colorValue: 0x5477D9, timeSlots: [CourseTimeSlot()])
+        XCTAssertTrue(store.importCourses([original], mode: .replace))
+        var reminderDisabled = original
+        reminderDisabled.timeSlots[0].reminderMinutesBefore = nil
+        var differentLead = original
+        differentLead.timeSlots[0].reminderMinutesBefore = 30
+        var withCredits = original
+        withCredits.credits = 3.5
+        var withNotes = original
+        withNotes.notes = "需要携带实验报告"
+        var differentColor = original
+        differentColor.colorValue = 0x3F9D80
+        let variants = [reminderDisabled, differentLead, withCredits, withNotes, differentColor]
+        XCTAssertTrue(store.importCourses(variants, mode: .merge))
+        XCTAssertEqual(store.courses.count, 6)
+        XCTAssertTrue(store.courses.contains { $0.reminderMinutesBefore == nil })
+        XCTAssertTrue(store.courses.contains { $0.reminderMinutesBefore == 30 })
+        XCTAssertTrue(store.courses.contains { $0.credits == 3.5 })
+        XCTAssertTrue(store.courses.contains { $0.notes == "需要携带实验报告" })
+        XCTAssertTrue(store.courses.contains { $0.colorValue == 0x3F9D80 })
+        // Importing the same complete information again remains idempotent.
+        XCTAssertTrue(store.importCourses([original] + variants, mode: .merge))
+        XCTAssertEqual(store.courses.count, 6)
+        let restarted = TimetableStore(defaults: defaults, performsSystemUpdates: false)
+        XCTAssertEqual(restarted.collection, store.collection)
+    }
+
+    @MainActor func testMergeImportPreservesRepeatedIdenticalSlotsAndIgnoresTheirOrder() throws {
+        let (defaults, name) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = TimetableStore(defaults: defaults, performsSystemUpdates: false)
+        let morning = CourseTimeSlot(location: "A101", weekdays: [.monday])
+        let afternoon = CourseTimeSlot(location: "B202", startSection: 5, weekdays: [.monday])
+        let original = Course(name: "算法", colorValue: 0x5477D9, timeSlots: [morning, afternoon])
+        XCTAssertTrue(store.importCourses([original], mode: .replace))
+        var repeatedMorning = morning
+        repeatedMorning.id = UUID()
+        let repeated = Course(name: original.name, colorValue: original.colorValue,
+                              timeSlots: [morning, afternoon, repeatedMorning])
+        XCTAssertTrue(store.importCourses([repeated], mode: .merge))
+        XCTAssertEqual(store.courses.count, 2)
+        XCTAssertEqual(store.courses.map { $0.timeSlots.count }.sorted(), [2, 3])
+        var reordered = repeated
+        reordered.timeSlots.reverse()
+        XCTAssertTrue(store.importCourses([reordered], mode: .merge))
+        XCTAssertEqual(store.courses.count, 2)
+        let repeatedStored = try XCTUnwrap(store.courses.first { $0.timeSlots.count == 3 })
+        let monday = Weekday.monday.date(inWeekContaining: store.semesterStartDate,
+                                         calendar: store.activeTimetable.calendar)
+        var table = store.activeTimetable
+        table.courses = [repeatedStored]
+        XCTAssertEqual(ScheduleEngine.occurrences(in: table, on: monday).count, 3)
+        let restarted = TimetableStore(defaults: defaults, performsSystemUpdates: false)
+        XCTAssertEqual(restarted.collection, store.collection)
+    }
+
     @MainActor func testFullRestoreCanBeUndone() throws {
         let (defaults, name) = isolatedDefaults()
         defer { defaults.removePersistentDomain(forName: name) }

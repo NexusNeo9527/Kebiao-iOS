@@ -295,6 +295,7 @@ struct CourseSignature: Equatable {
         let sectionCount: Int
         let weekdays: Set<Weekday>
         let startMinutes: Int?
+        let reminderMinutesBefore: Int?
         let weeks: Set<Int>
         let duration: Int?
         let dates: [Date]?
@@ -304,16 +305,27 @@ struct CourseSignature: Equatable {
             location = slot.location.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             startSection = slot.startSection; sectionCount = slot.sectionCount; weekdays = slot.weekdays
             startMinutes = slot.startTimeMinutes
+            reminderMinutesBefore = slot.reminderMinutesBefore
             weeks = slot.activeWeeks ?? Set((slot.startWeek ?? 1)...max(slot.startWeek ?? 1, slot.endWeek ?? 20))
             duration = slot.durationMinutes
-            let sorted = slot.datedEvents?.sorted { $0.startDate < $1.startDate }
+            let sorted = slot.datedEvents?.sorted {
+                $0.startDate == $1.startDate ? $0.endDate < $1.endDate : $0.startDate < $1.startDate
+            }
             dates = sorted?.map(\.startDate); ends = sorted?.map(\.endDate)
         }
     }
     private let name: String
-    private let slots: Set<Slot>
+    private let colorValue: Int
+    private let credits: Double?
+    private let notes: String?
+    private let slots: [Slot: Int]
     init(_ course: Course) {
         name = course.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        slots = Set(course.timeSlots.map(Slot.init))
+        colorValue = course.colorValue
+        credits = course.credits
+        notes = course.notes
+        var counts: [Slot: Int] = [:]
+        for slot in course.timeSlots { counts[Slot(slot), default: 0] += 1 }
+        slots = counts
     }
 }

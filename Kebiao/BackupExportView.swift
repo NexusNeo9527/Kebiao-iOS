@@ -36,6 +36,13 @@ struct BackupExportView: View {
         _tableID = State(initialValue: table.id)
         _start = State(initialValue: first)
         _end = State(initialValue: table.calendar.date(byAdding: .day, value: table.weekCount * 7 - 1, to: first) ?? first)
+        #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-backup-preview") {
+            let restored = Timetable(name: "恢复测试课表", semesterStartDate: table.semesterStartDate,
+                timeZoneIdentifier: table.timeZoneIdentifier, courses: [Course.samples[0]])
+            _pendingBackup = State(initialValue: TimetableCollection(timetables: [restored], activeTimetableID: restored.id))
+        }
+        #endif
     }
     private var table: Timetable? { store.timetable(id: tableID) }
     private var eventCount: Int {
@@ -50,10 +57,14 @@ struct BackupExportView: View {
             Form {
                 Section {
                     Text("\(store.timetables.count) 张课表 · \(store.timetables.reduce(0) { $0 + $1.courses.count }) 门课程")
+                        .accessibilityIdentifier("backup-current-count")
                     Button("导出完整备份") { exportBackup() }.disabled(store.isReadOnly)
                         .accessibilityIdentifier("backup-export")
                     Button("选择备份文件恢复") { importing = true }.accessibilityIdentifier("backup-import")
-                    if store.hasRecoverySnapshot { Button("恢复到上一次完整恢复前") { confirmingSnapshot = true } }
+                    if store.hasRecoverySnapshot {
+                        Button("恢复到上一次完整恢复前") { confirmingSnapshot = true }
+                            .accessibilityIdentifier("backup-restore-snapshot")
+                    }
                     if store.isReadOnly, store.originalData != nil {
                         Button("导出保留的原始数据") {
                             if let data = store.originalData { prepare(data, type: .json, name: "课表原始数据.json") }
@@ -64,6 +75,8 @@ struct BackupExportView: View {
                 }
                 if let backup = pendingBackup {
                     Section("恢复预览") {
+                        Text("\(backup.timetables.count) 张课表 · \(backup.timetables.reduce(0) { $0 + $1.courses.count }) 门课程")
+                            .accessibilityIdentifier("backup-restore-count")
                         ForEach(backup.timetables) { table in
                             LabeledContent(table.name, value: "\(table.courses.count) 门 · \(table.weekCount) 周")
                         }
