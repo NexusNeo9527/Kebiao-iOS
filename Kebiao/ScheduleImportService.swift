@@ -261,16 +261,22 @@ enum ScheduleImportService {
         }
 
         for page in pages {
+            var pendingDayHeader = false
             for raw in page {
                 let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 if line.range(of: #"^(星期|周)[一二三四五六日天]$"#, options: .regularExpression) != nil,
                    let weekday = parseWeekdays(line).first {
+                    // Consecutive weekday headers describe a column grid,
+                    // rather than the row-grouped school export handled here.
+                    if pendingDayHeader { return nil }
                     flush()
                     day = weekday
                     sections = nil
+                    pendingDayHeader = true
                 } else if let range = pdfSectionRange(line) {
                     flush()
                     sections = range
+                    pendingDayHeader = false
                 } else if line.hasPrefix("实践课程") {
                     flush()
                     warnings.append("PDF 包含未指定星期和节次的实践课程，请按学校安排手动添加")
