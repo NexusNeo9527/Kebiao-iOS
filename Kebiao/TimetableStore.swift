@@ -24,7 +24,7 @@ final class TimetableStore {
     init() {
         defaults = UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier) ?? .standard
         semesterStartDate = ScheduleEngine.semesterStart(for: .now)
-        #if DEBUG
+        #if targetEnvironment(simulator)
         if ProcessInfo.processInfo.arguments.contains("--ui-test-overlap") {
             courses = (0..<4).map { index in
                 Course(name: ["轻量级应用开发", "管理学", "算法分析", "操作系统基础"][index],
