@@ -3,6 +3,8 @@ import SwiftUI
 struct DayScheduleView: View {
     let store: TimetableStore
     @State private var selectedDate = Date.now
+    @State private var now = Date.now
+    @Environment(\.scenePhase) private var scenePhase
     @State private var presentedCourse: Course?
     @State private var creatingCourse = false
     @State private var completedExpanded = true
@@ -12,10 +14,10 @@ struct DayScheduleView: View {
     }
 
     private var courses: [Course] {
-        let week = ScheduleEngine.academicWeekNumber(for: selectedDate)
-        return store.courses(on: weekday).filter { $0.isActive(academicWeek: week) }
+        _ = store.semesterStartDate
+        return ScheduleEngine.courses(in: store.courses, on: selectedDate)
     }
-    private var completed: [Course] { courses.filter { endDate(for: $0) < .now && Calendar.current.isDateInToday(selectedDate) } }
+    private var completed: [Course] { courses.filter { endDate(for: $0) <= now && Calendar.current.isDateInToday(selectedDate) } }
     private var upcoming: [Course] { courses.filter { !completed.contains($0) } }
 
     var body: some View {
@@ -67,6 +69,15 @@ struct DayScheduleView: View {
             .padding(.bottom, 28)
         }
         .navigationBarHidden(true)
+        .task {
+            while !Task.isCancelled {
+                now = .now
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { now = .now }
+        }
         .sheet(isPresented: $creatingCourse) {
             CourseEditorView(course: nil, store: store)
         }
@@ -196,14 +207,14 @@ struct DayScheduleView: View {
 
     private func startText(_ course: Course) -> String { minuteText(course.resolvedStartTimeMinutes) }
     private func endText(_ course: Course) -> String {
-        let duration = max(45, course.sectionCount * 45 + max(0, course.sectionCount - 1) * 10)
+        let duration = course.resolvedDurationMinutes
         return minuteText(course.resolvedStartTimeMinutes + duration)
     }
     private func timeRange(_ course: Course) -> String { "\(startText(course))–\(endText(course))" }
     private func minuteText(_ minutes: Int) -> String { String(format: "%02d:%02d", minutes / 60, minutes % 60) }
     private func endDate(for course: Course) -> Date {
         let start = Calendar.current.startOfDay(for: selectedDate)
-        let duration = max(45, course.sectionCount * 45 + max(0, course.sectionCount - 1) * 10)
+        let duration = course.resolvedDurationMinutes
         return Calendar.current.date(byAdding: .minute, value: course.resolvedStartTimeMinutes + duration, to: start) ?? start
     }
 

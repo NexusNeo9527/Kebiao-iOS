@@ -4,8 +4,11 @@ struct AppView: View {
     let store: TimetableStore
     @State private var selectedTab: AppTab = {
         let arguments = ProcessInfo.processInfo.arguments
-        return arguments.contains("--ui-test-add-course") || arguments.contains("--ui-test-import") ? .courses : .day
+        if arguments.contains("--ui-test-live-activity") { return .reminders }
+        if arguments.contains("--ui-test-overlap") { return .schedule }
+        return arguments.contains("--ui-test-add-course") || arguments.contains(where: { $0.hasPrefix("--ui-test-import") }) ? .courses : .day
     }()
+    @State private var scheduleDate = Date.now
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -17,13 +20,17 @@ struct AppView: View {
             .tag(AppTab.day)
 
             NavigationStack {
-                ScheduleView(store: store)
+                ScheduleView(store: store, initialDate: scheduleDate)
+                    .id(scheduleDate)
             }
             .tabItem { Label("课表", systemImage: "calendar") }
             .tag(AppTab.schedule)
 
             NavigationStack {
-                CoursesView(store: store)
+                CoursesView(store: store) { date in
+                    scheduleDate = date
+                    selectedTab = .schedule
+                }
             }
             .tabItem { Label("课程", systemImage: "books.vertical") }
             .tag(AppTab.courses)
@@ -34,13 +41,19 @@ struct AppView: View {
             .tag(AppTab.reminders)
         }
         .tint(KebiaoTheme.accent)
+        .preferredColorScheme(.light)
         .onOpenURL(perform: handleDeepLink)
         .task {
-            await LiveActivityCoordinator.refresh(courses: store.courses)
+            await ReminderScheduler.shared.reschedule(courses: store.courses)
+            while !Task.isCancelled {
+                if scenePhase == .active { await LiveActivityCoordinator.refresh(courses: store.courses) }
+                try? await Task.sleep(for: .seconds(30))
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task {
+                await ReminderScheduler.shared.reschedule(courses: store.courses)
                 await LiveActivityCoordinator.refresh(courses: store.courses)
             }
         }

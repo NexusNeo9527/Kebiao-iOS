@@ -46,7 +46,13 @@ jobs:
           echo "SIMULATOR_UDID=$DEVICE_ID" >> "$GITHUB_ENV"
           echo "Using runtime $RUNTIME_ID on simulator $DEVICE_ID"
 
-      - name: Run unit tests
+      - name: Check portal extraction regressions
+        run: node scripts/verify-portal-extraction.js
+
+      - name: Check school browser identity regressions
+        run: node scripts/verify-portal-browser.js
+
+      - name: Run unit and Live Activity UI tests
         run: >-
           xcodebuild
           -project Kebiao.xcodeproj
@@ -54,8 +60,26 @@ jobs:
           -sdk iphonesimulator
           -destination "platform=iOS Simulator,id=$SIMULATOR_UDID"
           -derivedDataPath build/DerivedData
+          -resultBundlePath build/TestResults.xcresult
           CODE_SIGNING_ALLOWED=NO
           test
+
+      - name: Export Live Activity UI screenshots
+        if: always()
+        run: |
+          if [ -d build/TestResults.xcresult ]; then
+            mkdir -p build/visual-qa
+            xcrun xcresulttool export attachments --path build/TestResults.xcresult --output-path build/visual-qa
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Kebiao-test-results
+          path: build/TestResults.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Build for iOS Simulator
         run: >-
@@ -97,11 +121,27 @@ jobs:
           sleep 3
           xcrun simctl io "$DEVICE_ID" screenshot build/visual-qa/school-import.png
 
+          xcrun simctl terminate "$DEVICE_ID" com.example.kebiao
+          xcrun simctl launch "$DEVICE_ID" com.example.kebiao --ui-test-overlap
+          sleep 3
+          xcrun simctl io "$DEVICE_ID" screenshot build/visual-qa/overlap-timetable.png
+
+          xcrun simctl terminate "$DEVICE_ID" com.example.kebiao
+          xcrun simctl launch "$DEVICE_ID" com.example.kebiao --ui-test-import-preview
+          sleep 3
+          xcrun simctl io "$DEVICE_ID" screenshot build/visual-qa/pdf-import-preview.png
+
+          xcrun simctl terminate "$DEVICE_ID" com.example.kebiao
+          xcrun simctl launch "$DEVICE_ID" com.example.kebiao --ui-test-import-complete
+          sleep 3
+          xcrun simctl io "$DEVICE_ID" screenshot build/visual-qa/pdf-import-complete.png
+
       - name: Upload visual QA screenshots
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: Kebiao-visual-qa
-          path: build/visual-qa/*.png
+          path: build/visual-qa
           if-no-files-found: error
           retention-days: 7
 
@@ -112,3 +152,57 @@ jobs:
           path: build/DerivedData/Build/Products/Debug-iphonesimulator/Kebiao.app
           if-no-files-found: error
           retention-days: 7
+
+  release-build:
+    name: Archive Release with latest stable Xcode
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Archive app and widget
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -project Kebiao.xcodeproj -scheme Kebiao \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath build/Kebiao.xcarchive CODE_SIGNING_ALLOWED=NO archive
+          bash scripts/verify-widget-package.sh build/Kebiao.xcarchive/Products/Applications/Kebiao.app
+      - name: Package and verify unsigned IPA
+        run: |
+          set -euo pipefail
+          APP=build/Kebiao.xcarchive/Products/Applications/Kebiao.app
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
+          mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          (cd build/ipa && zip -rq "Kebiao-$VERSION-unsigned.ipa" Payload)
+          IPA="build/ipa/Kebiao-$VERSION-unsigned.ipa"
+          python3 - "$IPA" "$VERSION" <<'PY'
+          import hashlib, plistlib, sys, zipfile
+          path, version = sys.argv[1:]
+          with zipfile.ZipFile(path) as archive:
+              app = plistlib.loads(archive.read('Payload/Kebiao.app/Info.plist'))
+              widget = plistlib.loads(archive.read('Payload/Kebiao.app/PlugIns/KebiaoWidgetExtension.appex/Info.plist'))
+              assert app['CFBundleShortVersionString'] == widget['CFBundleShortVersionString'] == version
+              assert app['CFBundleVersion'] == widget['CFBundleVersion']
+              assert widget['CFBundleIdentifier'].startswith(app['CFBundleIdentifier'] + '.')
+          with open(path, 'rb') as source:
+              digest = hashlib.sha256(source.read()).hexdigest()
+          with open(path + '.sha256', 'w') as output:
+              output.write(digest + '  ' + path.rsplit('/', 1)[-1] + '\n')
+          print(path, digest)
+          PY
+      - name: Upload verified Release IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: Kebiao-release-ipa
+          path: |
+            build/ipa/*.ipa
+            build/ipa/*.sha256
+          if-no-files-found: error
+          retention-days: 14

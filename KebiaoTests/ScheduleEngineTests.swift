@@ -348,6 +348,172 @@ final class ScheduleEngineTests: XCTestCase {
         XCTAssertTrue(course.isActive(academicWeek: 15))
     }
 
+    func testUnicodeSchoolPDFPreservesSectionsMergedRowsAndFridayContinuation() throws {
+        // Anonymous fixture uses the source PDF's CMap, rotation and page split.
+        // No student name, ID or private file is uploaded to the repository.
+        let pages = [
+            ["星期二", "3-4", "算法分析与设计★", "周数:3-12周,14-16周/地点:A201/教师:甲",
+             "5-6", "形势与政策★", "周数:3-6周/地点:A202/教师:乙",
+             "数字图像处理基础★", "周数:7-12周,14-16周/地点:A203/教师:丙",
+             "星期三", "3-4", "管理学概论★", "周数:2-7周/地点:A204/教师:丁",
+             "星期四", "3-4", "算法分析与设计☆", "周数:6-14周(双),15-16周/地点:A205/教师:甲",
+             "星期五", "1-2", "软件设计模式★", "周数:2-3周/地点:A206/教师:戊",
+             "3-4", "操作系统基础☆", "周数:5-12周/地点:A207/教师:己",
+             "5-6", "管理学概论★", "周数:2-7周/地点:A208/教师:丁"],
+            ["7-8", "操作系统基础★", "周数:2-6周/地点:A209/教师:己",
+             "移动应用开发技术★", "周数:8-11周/地点:A210/教师:庚",
+             "实践课程：《课程设计》/18-19周;"]
+        ]
+        let result = try ScheduleImportService.parsePDF(data: unicodeSchoolPDF(pages))
+        XCTAssertEqual(result.courses.count, 10)
+        XCTAssertEqual(result.courses.map(\.startSection), [3, 5, 5, 3, 3, 1, 3, 5, 7, 7])
+        XCTAssertEqual(result.courses.map(\.weekdays), [Weekday.tuesday, .tuesday, .tuesday, .wednesday,
+            .thursday, .friday, .friday, .friday, .friday, .friday].map { Set([$0]) })
+        XCTAssertEqual(result.courses[4].activeWeeks, Set([6, 8, 10, 12, 14, 15, 16]))
+        XCTAssertEqual(result.courses.last?.activeWeeks, Set([8, 9, 10, 11]))
+        XCTAssertTrue(result.warnings.contains { $0.contains("实践课程") })
+    }
+
+    func testAll26SchoolPDFRowsKeepTheirOriginalWeekdayAndSection() throws {
+        let pages: [[String]] = [
+            [
+                "星期一",
+                "1-2",
+                "课程1★",
+                "周数: 2-9周/地点:A101/教师:老师",
+                "课程2☆",
+                "周数: 10-12周,14-16周/地点:A101/教师:老师",
+                "3-4",
+                "课程3★",
+                "周数: 2-12周,14-16周/地点:A101/教师:老师",
+                "星期二",
+                "3-4",
+                "课程4★",
+                "周数: 3-12周,14-16周/地点:A101/教师:老师",
+                "5-6",
+                "课程5★",
+                "周数: 3-6周/地点:A101/教师:老师",
+                "课程6★",
+                "周数: 7-12周,14-16周/地点:A101/教师:老师",
+                "9-10",
+                "课程7☆",
+                "周数: 16周/地点:A101/教师:老师",
+                "星期三",
+                "1-2",
+                "课程8☆",
+                "周数: 3-10周/地点:A101/教师:老师",
+                "课程9☆",
+                "周数: 12-14周(双),15-16周/地点:A101/教师:老师",
+                "3-4",
+                "课程10★",
+                "周数: 2-7周/地点:A101/教师:老师",
+                "课程11★",
+                "周数: 14-16周/地点:A101/教师:老师",
+                "5-6",
+                "课程12★",
+                "周数: 2-12周/地点:A101/教师:老师",
+                "7-8",
+                "课程13★",
+                "周数: 2周/地点:A101/教师:老师",
+                "课程14★",
+                "周数: 3-11周/地点:A101/教师:老师",
+                "课程15☆",
+                "周数: 15-16周/地点:A101/教师:老师",
+                "星期四",
+                "3-4",
+                "课程16☆",
+                "周数: 6-14周(双),15-16周/地点:A101/教师:老师",
+                "5-6",
+                "课程17★",
+                "周数: 14-16周/地点:A101/教师:老师",
+                "7-8",
+                "课程18★",
+                "周数: 2-11周/地点:A101/教师:老师",
+                "课程19★",
+                "周数: 12-14周(双),15-16周/地点:A101/教师:老师",
+                "9-10",
+                "课程20☆",
+                "周数: 4-6周/地点:A101/教师:老师",
+                "星期五",
+                "1-2",
+                "课程21★",
+                "周数: 2-3周/地点:A101/教师:老师",
+                "课程22☆",
+                "周数: 4-12周/地点:A101/教师:老师",
+                "3-4",
+                "课程23☆",
+                "周数: 5-12周/地点:A101/教师:老师",
+                "5-6",
+                "课程24★",
+                "周数: 2-7周/地点:A101/教师:老师",
+            ],
+            [
+                "7-8",
+                "课程25★",
+                "周数: 2-6周/地点:A101/教师:老师",
+                "课程26★",
+                "周数: 8-11周/地点:A101/教师:老师",
+                "实践课程：课程设计/18-19周;",
+            ],
+        ]
+        let result = try XCTUnwrap(ScheduleImportService.parseUnicodeSchoolRows(pages, sourceName: "匿名课表"))
+        XCTAssertEqual(result.courses.count, 26)
+        XCTAssertEqual(result.courses.map(\.startSection),
+            [1, 1, 3, 3, 5, 5, 9, 1, 1, 3, 3, 5, 7, 7, 7, 3, 5, 7, 7, 9, 1, 1, 3, 5, 7, 7])
+        let days: [Weekday] = Array(repeating: .monday, count: 3) + Array(repeating: .tuesday, count: 4) +
+            Array(repeating: .wednesday, count: 8) + Array(repeating: .thursday, count: 5) +
+            Array(repeating: .friday, count: 6)
+        XCTAssertEqual(result.courses.map(\.weekdays), days.map { Set([$0]) })
+        XCTAssertEqual(result.courses[8].activeWeeks, Set([12, 14, 15, 16]))
+        XCTAssertEqual(result.courses[15].activeWeeks, Set([6, 8, 10, 12, 14, 15, 16]))
+        XCTAssertEqual(result.courses[25].activeWeeks, Set([8, 9, 10, 11]))
+        let fridayWeek6 = result.courses.filter { $0.weekdays.contains(.friday) && $0.isActive(academicWeek: 6) }
+        XCTAssertEqual(fridayWeek6.map(\.startSection), [1, 3, 5, 7])
+        XCTAssertEqual(TimetableCourseGroup.groups(fridayWeek6).map { $0.courses.count }, [1, 1, 1, 1])
+        let mondayWeek6 = result.courses.filter { $0.weekdays.contains(.monday) && $0.isActive(academicWeek: 6) }
+        XCTAssertEqual(mondayWeek6.map(\.startSection), [1, 3])
+    }
+
+    func testPartialUnicodeSchoolRowsDoNotBypassFallbackOrInventMissingSections() {
+        let result = ScheduleImportService.parseUnicodeSchoolRows([
+            ["星期一", "1-2", "网络★", "周数:1-16周/地点:A101/教师:老师"],
+            ["没有节次★", "周数:1-16周/地点:A101/教师:老师"]
+        ], sourceName: "课表")
+        XCTAssertNil(result)
+        XCTAssertNil(ScheduleImportService.parseUnicodeSchoolRows([
+            ["星期一", "星期二", "1-2", "网络★", "周数:1-16周/地点:A101/教师:老师"]
+        ], sourceName: "横向网格"))
+    }
+
+    private func unicodeSchoolPDF(_ pages: [[String]]) -> Data {
+        let pageIDs = pages.indices.map { 5 + $0 * 2 }
+        var objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Count \(pages.count) /Kids [\(pageIDs.map { "\($0) 0 R" }.joined(separator: " "))] >>",
+            "<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [4 0 R] >>",
+            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 0 >> >>"
+        ]
+        for (index, lines) in pages.enumerated() {
+            let stream = lines.enumerated().map { offset, line in
+                let hex = line.data(using: .utf16BigEndian)!.map { String(format: "%02X", $0) }.joined()
+                return "BT /F1 12 Tf 1 0 0 1 30 \(780 - offset * 20) Tm <\(hex)> Tj ET"
+            }.joined(separator: "\n")
+            objects.append("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Rotate 90 /Resources << /Font << /F1 3 0 R >> >> /Contents \(pageIDs[index] + 1) 0 R >>")
+            objects.append("<< /Length \(stream.utf8.count) >>\nstream\n\(stream)\nendstream")
+        }
+        var pdf = "%PDF-1.4\n"
+        var offsets: [Int] = []
+        for (index, object) in objects.enumerated() {
+            offsets.append(pdf.utf8.count)
+            pdf += "\(index + 1) 0 obj\n\(object)\nendobj\n"
+        }
+        let xref = pdf.utf8.count
+        pdf += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
+        pdf += offsets.map { String(format: "%010d 00000 n \n", $0) }.joined()
+        pdf += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R >>\nstartxref\n\(xref)\n%%EOF"
+        return Data(pdf.utf8)
+    }
+
     func testPDFFieldsStopAtTheNextLabelWhenOCRLosesSlashes() {
         let details = "周数:7-12周,14-16周 地点:教学楼A101 教师:张老师"
         XCTAssertEqual(ScheduleImportService.pdfField("周数", in: details), "7-12周,14-16周")

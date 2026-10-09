@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct ImportScheduleView: View {
     let store: TimetableStore
+    var onShowSchedule: (Date) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var isImporterPresented = false
     @State private var isParsingFile = false
@@ -11,20 +12,38 @@ struct ImportScheduleView: View {
     @State private var pendingMode: TimetableStore.ImportMode?
     @State private var presentedSheet: ImportInputSheet?
     @State private var portalAddress = ""
+    @State private var previewStyle: ImportPreviewStyle = .timetable
+    @State private var completedImport: ScheduleImportPreview?
+    @State private var completedMode: TimetableStore.ImportMode?
+    @State private var completionFeedbackTrigger = 0
 
     var body: some View {
         NavigationStack {
             ZStack {
                 KebiaoTheme.background.ignoresSafeArea()
+                ScrollViewReader { scrollProxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        introCard
-                        portalLoginCard
-                        supportedFormats
-                        if let preview { previewCard(preview) }
+                        if let completedImport {
+                            completionCard(completedImport)
+                        } else {
+                            if let preview { previewCard(preview) }
+                            introCard
+                            portalLoginCard
+                            supportedFormats
+                        }
                     }
+                    .id("import-result")
                     .padding(18)
                     .padding(.bottom, 30)
+                }
+                .disabled(isParsingFile)
+                .onChange(of: preview?.courses) { _, courses in
+                    if courses != nil { scrollProxy.scrollTo("import-result", anchor: .top) }
+                }
+                .onChange(of: completedImport != nil) { _, _ in
+                    scrollProxy.scrollTo("import-result", anchor: .top)
+                }
                 }
             }
             .navigationTitle("导入学校课表")
@@ -35,6 +54,27 @@ struct ImportScheduleView: View {
                 }
             }
             .onAppear(perform: migrateSavedPortalAddress)
+            .sensoryFeedback(.success, trigger: completionFeedbackTrigger)
+            .safeAreaInset(edge: .bottom) {
+                if let preview, completedImport == nil {
+                    importActions(preview)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity)
+                        .background(.bar)
+                }
+            }
+            .task {
+                #if targetEnvironment(simulator)
+                let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains("--ui-test-import-preview") || arguments.contains("--ui-test-import-complete") {
+                    guard preview == nil, completedImport == nil else { return }
+                    preview = ScheduleImportPreview(sourceName: "示例课表.pdf", format: .pdf,
+                                                     courses: Course.samples, warnings: [])
+                    if arguments.contains("--ui-test-import-complete") { completeImport(.merge) }
+                }
+                #endif
+            }
             .fileImporter(
                 isPresented: $isImporterPresented,
                 allowedContentTypes: [.pdf, .commaSeparatedText, .json, .calendarEvent, .plainText, .html, .data]
@@ -71,6 +111,26 @@ struct ImportScheduleView: View {
                         sourceName: url.host ?? "教务系统",
                         preview: $preview
                     )
+                case .timetable(let imported):
+                    NavigationStack {
+                        ScheduleView(store: store, courses: imported.courses,
+                                     initialDate: previewDate(imported), showsNavigationBar: true)
+                            .navigationTitle("课表预览")
+                            .navigationBarTitleDisplayMode(.inline)
+                            .toolbar {
+                                ToolbarItem(placement: .confirmationAction) {
+                                    Button("完成") { presentedSheet = nil }
+                                }
+                            }
+                    }
+                case .correction(let course):
+                    ImportCourseCorrectionView(course: course) { corrected in
+                        guard let current = preview else { return }
+                        preview = ScheduleImportPreview(sourceName: current.sourceName, format: current.format,
+                            courses: current.courses.map { $0.id == corrected.id ? corrected : $0 },
+                            warnings: current.warnings)
+                        presentedSheet = nil
+                    }
                 }
             }
             .alert("导入失败", isPresented: Binding(
@@ -148,6 +208,10 @@ struct ImportScheduleView: View {
             VStack(alignment: .leading, spacing: 13) {
                 Label("输入教务系统网址", systemImage: "person.badge.key.fill")
                     .font(.headline)
+                Button("重庆理工大学 · 办事大厅") {
+                    portalAddress = "https://ehall.cqut.edu.cn/new_office_hall/"
+                }
+                .buttonStyle(.bordered)
                 TextField("教务系统网址，例如 https://jw.example.edu.cn", text: $portalAddress)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
@@ -169,7 +233,7 @@ struct ImportScheduleView: View {
                 .buttonBorderShape(.roundedRectangle(radius: 14))
                 .tint(KebiaoTheme.accent)
                 .disabled(portalURL == nil)
-                Text("填写学校提供的固定入口网址。登录后打开个人课表，再点“读取当前课表”；账号和密码由学校网页处理。")
+                Text("登录 → 进入教务系统 → 选择学年学期 → 打开完整个人课表 → 读取课表。重庆理工大学请从办事大厅进入教务系统；个人资料页不是课表。若学校限制访问，请使用校园网络。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -194,7 +258,7 @@ struct ImportScheduleView: View {
         UserDefaults.standard.removeObject(forKey: "kebiao.school.portalURL")
     }
 
-    private static func stablePortalEntry(from original: URLComponents) -> URL? {
+    static func stablePortalEntry(from original: URLComponents) -> URL? {
         var components = original
         let tokenNames: Set<String> = ["ticket", "code", "access_token", "id_token", "oauth_token"]
         let fragmentQuery = components.fragment?
@@ -208,9 +272,17 @@ struct ImportScheduleView: View {
             .contains { tokenNames.contains($0.name.lowercased()) }
 
         if hasOneTimeToken {
-            components.path = "/"
-            components.query = nil
-            components.fragment = nil
+            // Preserve the application entry and SPA route, remove temporary
+            // credentials from both the regular query and hash query.
+            let removed = tokenNames.union(["state"])
+            components.queryItems = components.queryItems?.filter { !removed.contains($0.name.lowercased()) }
+            if components.queryItems?.isEmpty == true { components.queryItems = nil }
+            if let fragment = components.fragment, let separator = fragment.firstIndex(of: "?") {
+                var query = URLComponents()
+                query.queryItems = fragmentItems.filter { !removed.contains($0.name.lowercased()) }
+                components.fragment = String(fragment[..<separator]) +
+                    ((query.queryItems?.isEmpty == false) ? (query.query.map { "?" + $0 } ?? "") : "")
+            }
         }
         return components.url
     }
@@ -266,6 +338,46 @@ struct ImportScheduleView: View {
                     .background(KebiaoTheme.accent.opacity(0.1), in: Capsule())
             }
 
+            Label("解析完成，请核对课程后确认导入", systemImage: "checkmark.circle.fill")
+                .font(.subheadline)
+                .foregroundStyle(.green)
+
+            Picker("预览方式", selection: $previewStyle) {
+                Text("课表图").tag(ImportPreviewStyle.timetable)
+                Text("课程明细").tag(ImportPreviewStyle.list)
+            }
+            .pickerStyle(.segmented)
+
+            if previewStyle == .timetable {
+                ScheduleView(store: store, courses: preview.courses,
+                             initialDate: previewDate(preview), showsNavigationBar: true)
+                    .id(preview.courses)
+                    .frame(height: 420)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                Button {
+                    presentedSheet = .timetable(preview)
+                } label: {
+                    Label("展开课表预览", systemImage: "arrow.up.left.and.arrow.down.right")
+                }
+                Text("左右滑动查看整周，点击课程查看详情。预览内容尚未保存。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                previewCourseList(preview)
+            }
+
+            ForEach(preview.warnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+        }
+        .padding(18)
+        .background(.white, in: RoundedRectangle(cornerRadius: KebiaoTheme.cardRadius, style: .continuous))
+    }
+
+    private func previewCourseList(_ preview: ScheduleImportPreview) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(preview.courses) { course in
                 HStack(spacing: 10) {
                     Circle().fill(course.color).frame(width: 10, height: 10)
@@ -282,41 +394,89 @@ struct ImportScheduleView: View {
                         }
                     }
                     Spacer()
+                    Button("校正") { presentedSheet = .correction(course) }
+                        .font(.caption).buttonStyle(.bordered)
+                        .accessibilityLabel("校正\(course.name)的星期、节次和周次")
                 }
                 if course.id != preview.courses.last?.id { Divider() }
             }
 
-            ForEach(preview.warnings, id: \.self) { warning in
-                Label(warning, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
-            HStack(spacing: 10) {
-                Button("合并导入") { pendingMode = .merge }
-                    .buttonStyle(.borderedProminent)
-                    .tint(KebiaoTheme.accent)
-                Button("替换现有") { pendingMode = .replace }
-                    .buttonStyle(.bordered)
-                    .tint(.secondary)
-            }
-            .buttonBorderShape(.roundedRectangle(radius: 12))
         }
-        .padding(18)
-        .background(.white, in: RoundedRectangle(cornerRadius: KebiaoTheme.cardRadius, style: .continuous))
+    }
+
+    private func importActions(_ preview: ScheduleImportPreview) -> some View {
+        HStack(spacing: 10) {
+            Button("合并导入") { pendingMode = .merge }
+                .frame(maxWidth: .infinity)
+                .buttonStyle(.borderedProminent)
+                .tint(KebiaoTheme.accent)
+            Button("替换现有") { pendingMode = .replace }
+                .frame(maxWidth: .infinity)
+                .buttonStyle(.bordered)
+                .tint(.secondary)
+        }
+        .buttonBorderShape(.roundedRectangle(radius: 12))
+        .disabled(preview.courses.isEmpty || isParsingFile)
     }
 
     private func completeImport(_ mode: TimetableStore.ImportMode) {
-        guard let preview else { return }
+        guard let preview, !preview.courses.isEmpty, completedImport == nil, !isParsingFile else { return }
         store.importCourses(preview.courses, mode: mode)
         pendingMode = nil
-        dismiss()
+        completedMode = mode
+        completedImport = preview
+        completionFeedbackTrigger += 1
+    }
+
+    private func previewDate(_ preview: ScheduleImportPreview) -> Date {
+        preview.timetablePreviewDate(semesterStart: store.semesterStartDate)
+    }
+
+    private func completionCard(_ imported: ScheduleImportPreview) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("导入完成", systemImage: "checkmark.circle.fill")
+                .font(.title2.bold())
+                .foregroundStyle(.green)
+                .accessibilityAddTraits(.isHeader)
+            Text("已\(completedMode == .replace ? "替换导入" : "合并导入") \(imported.courses.count) 门课程")
+                .font(.headline)
+            Text("\(imported.sourceName) · 当前共 \(store.courses.count) 门课程")
+                .font(.subheadline).foregroundStyle(.secondary)
+            ForEach(imported.warnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            Button {
+                let date = previewDate(imported)
+                dismiss()
+                onShowSchedule(date)
+            } label: {
+                Label("查看课表", systemImage: "calendar")
+                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent).tint(KebiaoTheme.accent)
+
+            Text("已保存的课表").font(.headline)
+            ScheduleView(store: store, initialDate: previewDate(imported), showsNavigationBar: true)
+                .frame(height: 420)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            Button("继续导入其他课表") {
+                completedImport = nil
+                completedMode = nil
+                preview = nil
+                previewStyle = .timetable
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(18)
+        .background(.white, in: RoundedRectangle(cornerRadius: KebiaoTheme.cardRadius))
     }
 
     private func parseImportedFile(_ url: URL) {
         isParsingFile = true
         preview = nil
         errorMessage = nil
+        previewStyle = .timetable
         Task {
             do {
                 let importedPreview = try await Task.detached(priority: .userInitiated) {
@@ -334,13 +494,88 @@ struct ImportScheduleView: View {
 private enum ImportInputSheet: Identifiable {
     case paste
     case portal(URL)
+    case timetable(ScheduleImportPreview)
+    case correction(Course)
 
     var id: String {
         switch self {
         case .paste: "paste"
         case .portal(let url): "portal-\(url.absoluteString)"
+        case .timetable: "timetable-preview"
+        case .correction(let course): "correction-\(course.id)"
         }
     }
+}
+
+private struct ImportCourseCorrectionView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: Course
+    @State private var weeks: String
+    let onSave: (Course) -> Void
+
+    init(course: Course, onSave: @escaping (Course) -> Void) {
+        _draft = State(initialValue: course)
+        _weeks = State(initialValue: course.activeWeeks.map { $0.sorted().map(String.init).joined(separator: ",") }
+            ?? "\(course.resolvedStartWeek)-\(course.resolvedEndWeek)")
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("课程信息") {
+                    TextField("课程名称", text: $draft.name)
+                    TextField("教师", text: $draft.teacher)
+                    TextField("教室", text: $draft.location)
+                }
+                Section("对照原课表校正位置") {
+                    ForEach(Weekday.allCases) { day in
+                        Toggle(day.shortName, isOn: Binding(
+                            get: { draft.weekdays.contains(day) },
+                            set: { if $0 { draft.weekdays.insert(day) } else { draft.weekdays.remove(day) } }
+                        ))
+                    }
+                    Stepper("开始：第 \(draft.startSection) 节", value: $draft.startSection, in: 1...12)
+                        .onChange(of: draft.startSection) { _, value in
+                            draft.sectionCount = min(draft.sectionCount, 13 - value)
+                        }
+                    Stepper("连续 \(draft.sectionCount) 节", value: $draft.sectionCount,
+                            in: 1...min(4, 13 - draft.startSection))
+                }
+                if draft.scheduledDates == nil {
+                    Section("上课周次") {
+                        TextField("例如 1-16周(单),18周", text: $weeks)
+                        Text("支持连续范围、单周、双周和不连续周次。保存后课表预览会立即更新。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("校正导入课程")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        if draft.scheduledDates == nil {
+                            let parsed = ScheduleImportService.pdfWeekNumbers(weeks)
+                            draft.activeWeeks = parsed
+                            draft.startWeek = parsed.min()
+                            draft.endWeek = parsed.max()
+                            draft.notes = "原始周次：\(weeks)"
+                        }
+                        onSave(draft)
+                    }
+                    .disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                              draft.weekdays.isEmpty ||
+                              (draft.scheduledDates == nil && ScheduleImportService.pdfWeekNumbers(weeks).isEmpty))
+                }
+            }
+        }
+    }
+}
+
+private enum ImportPreviewStyle: Hashable {
+    case timetable
+    case list
 }
 
 private struct PasteScheduleView: View {

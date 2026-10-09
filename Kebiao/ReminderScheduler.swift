@@ -5,60 +5,67 @@ actor ReminderScheduler {
     static let shared = ReminderScheduler()
     private let center = UNUserNotificationCenter.current()
     private let identifierPrefix = "kebiao.course."
+    private var generation = 0
+    private var queue: Task<Void, Never>?
 
     func requestAuthorizationAndReschedule(courses: [Course]) async -> Bool {
         do {
             let granted = try await center.requestAuthorization(options: [.alert, .sound])
             UserDefaults.standard.set(granted, forKey: ReminderPreferences.enabledKey)
-            if granted {
-                await reschedule(courses: courses)
-            }
+            if granted { await reschedule(courses: courses) }
             return granted
         } catch {
-            UserDefaults.standard.set(false, forKey: ReminderPreferences.enabledKey)
+            await disable()
             return false
         }
     }
 
-    func disable() {
+    func disable() async {
+        generation += 1
         UserDefaults.standard.set(false, forKey: ReminderPreferences.enabledKey)
-        center.removeAllPendingNotificationRequests()
+        await removeCourseRequests()
     }
 
     func reschedule(courses: [Course]) async {
-        guard UserDefaults.standard.bool(forKey: ReminderPreferences.enabledKey) else { return }
-        let settings = await center.notificationSettings()
-        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
-
-        center.removeAllPendingNotificationRequests()
-        var requests: [UNNotificationRequest] = []
-
-        for course in courses {
-            guard let leadTime = course.reminderMinutesBefore else { continue }
-            for day in course.weekdays.sorted(by: { $0.weekIndex < $1.weekIndex }) {
-                let triggerParts = reminderDateComponents(day: day, startMinutes: course.resolvedStartTimeMinutes, leadTime: leadTime)
-                let content = UNMutableNotificationContent()
-                content.title = "还有 \(leadTime) 分钟上课"
-                content.body = "\(course.name) · \(course.location)"
-                content.sound = .default
-                content.userInfo = ["url": KebiaoConfiguration.scheduleURL.absoluteString]
-                let trigger = UNCalendarNotificationTrigger(dateMatching: triggerParts, repeats: true)
-                let identifier = "\(identifierPrefix)\(course.id.uuidString).\(day.rawValue)"
-                requests.append(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
-            }
+        generation += 1
+        let revision = generation
+        let previous = queue
+        let task = Task {
+            await previous?.value
+            await self.apply(courses: courses, revision: revision)
         }
-
-        for request in requests.prefix(60) {
-            try? await center.add(request)
-        }
+        queue = task
+        await task.value
     }
 
-    private func reminderDateComponents(day: Weekday, startMinutes: Int, leadTime: Int) -> DateComponents {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .current
-        let reference = Date(timeIntervalSince1970: 345_600)
-        let weekDate = day.date(inWeekContaining: reference, calendar: calendar)
-        let start = calendar.date(byAdding: .minute, value: startMinutes - leadTime, to: weekDate) ?? weekDate
-        return calendar.dateComponents([.weekday, .hour, .minute], from: start)
+    private func removeCourseRequests() async {
+        let requests = await center.pendingNotificationRequests()
+        center.removePendingNotificationRequests(withIdentifiers: requests.map(\.identifier).filter { $0.hasPrefix(identifierPrefix) })
+    }
+
+    private func apply(courses: [Course], revision: Int) async {
+        guard revision == generation, UserDefaults.standard.bool(forKey: ReminderPreferences.enabledKey) else { return }
+        let settings = await center.notificationSettings()
+        guard revision == generation, settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+        await removeCourseRequests()
+        guard revision == generation else { return }
+        for reminder in ScheduleEngine.reminders(in: courses, after: .now) {
+            guard revision == generation, UserDefaults.standard.bool(forKey: ReminderPreferences.enabledKey) else { return }
+            let course = reminder.occurrence.course
+            let content = UNMutableNotificationContent()
+            content.title = "还有 \(course.reminderMinutesBefore ?? 10) 分钟上课"
+            content.body = "\(course.name) · \(course.location)"
+            content.sound = .default
+            content.userInfo = ["url": KebiaoConfiguration.scheduleURL.absoluteString]
+            var parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: reminder.fireDate)
+            parts.timeZone = Calendar.current.timeZone
+            let trigger = UNCalendarNotificationTrigger(dateMatching: parts, repeats: false)
+            let identifier = "\(identifierPrefix)\(course.id.uuidString).\(Int(reminder.occurrence.startDate.timeIntervalSince1970))"
+            try? await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+            if revision != generation {
+                center.removePendingNotificationRequests(withIdentifiers: [identifier])
+                return
+            }
+        }
     }
 }

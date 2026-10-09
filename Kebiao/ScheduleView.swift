@@ -19,37 +19,59 @@ enum WeekSwipeDecision {
 
 struct ScheduleView: View {
     let store: TimetableStore
+    private let previewCourses: [Course]?
+    private let showsNavigationBar: Bool
     @State private var weekAnchor = Date.now
-    @State private var selectedCourse: Course?
+    @State private var selectedGroup: TimetableCourseGroup?
     @State private var weekDirection = 1
-    @GestureState private var dragOffset: CGFloat = 0
 
     private let timeColumnWidth: CGFloat = 46
     private let sectionHeight: CGFloat = 76
 
+    init(store: TimetableStore, courses: [Course]? = nil, initialDate: Date = .now,
+         showsNavigationBar: Bool = false) {
+        self.store = store
+        self.previewCourses = courses
+        self.showsNavigationBar = showsNavigationBar
+        _weekAnchor = State(initialValue: initialDate)
+    }
+
     private var calendar: Calendar { .current }
+    private var courses: [Course] { previewCourses ?? store.courses }
     private var sectionCount: Int {
-        max(10, store.courses.map(\.endSection).max() ?? 10)
+        max(10, courses.map(\.endSection).max() ?? 10)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             ZStack {
-                VStack(spacing: 0) {
-                    weekdayHeader
-                    timetable
+                GeometryReader { geometry in
+                    let dayWidth = max(96, (geometry.size.width - timeColumnWidth) / 7)
+                    ScrollViewReader { scrollProxy in
+                        ScrollView(.horizontal, showsIndicators: true) {
+                        VStack(spacing: 0) {
+                            weekdayHeader
+                            timetable(dayWidth: dayWidth)
+                        }
+                        .frame(width: timeColumnWidth + dayWidth * 7)
+                        .onAppear {
+                            if showsNavigationBar {
+                                scrollProxy.scrollTo("day-\(firstVisibleDay.rawValue)", anchor: .center)
+                            }
+                        }
+                        }
+                    }
                 }
                 .id(weekPageID)
-                .offset(x: dragOffset)
                 .transition(weekTransition)
             }
             .clipped()
         }
         .background(KebiaoTheme.background.ignoresSafeArea())
-        .navigationBarHidden(true)
-        .sheet(item: $selectedCourse) { course in
-            CourseDetailSheet(course: course)
+        .navigationBarHidden(!showsNavigationBar)
+        .sheet(item: $selectedGroup) { group in
+            GroupCourseSheet(group: group)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -107,6 +129,7 @@ struct ScheduleView: View {
                         .foregroundStyle(isToday(date) ? .white : .secondary)
                 }
                 .frame(maxWidth: .infinity)
+                .id("day-\(day.rawValue)")
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(day.fullName)，\(calendar.component(.day, from: date))日")
             }
@@ -114,11 +137,10 @@ struct ScheduleView: View {
         .padding(.bottom, 8)
     }
 
-    private var timetable: some View {
+    private func timetable(dayWidth: CGFloat) -> some View {
+        ScrollViewReader { scrollProxy in
         ScrollView(.vertical, showsIndicators: false) {
-            GeometryReader { geometry in
-                let dayWidth = (geometry.size.width - timeColumnWidth) / CGFloat(Weekday.allCases.count)
-
+            GeometryReader { _ in
                 ZStack(alignment: .topLeading) {
                     gridLines(dayWidth: dayWidth)
                     sectionLabels
@@ -130,22 +152,28 @@ struct ScheduleView: View {
             .padding(.bottom, 24)
         }
         .contentShape(Rectangle())
-        .simultaneousGesture(weekSwipeGesture)
+        .onAppear {
+            if showsNavigationBar {
+                scrollProxy.scrollTo("section-\(firstVisibleSection)", anchor: .top)
+            }
+        }
+        }
     }
 
-    private var weekSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 24, coordinateSpace: .local)
-            .updating($dragOffset) { value, state, _ in
-                guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                state = value.translation.width * 0.72
+    private var firstVisibleDay: Weekday {
+        Weekday.allCases.first { day in
+            courses.contains {
+                !ScheduleEngine.occurrences(for: $0, on: day.date(inWeekContaining: weekAnchor),
+                                             semesterStart: store.semesterStartDate).isEmpty
             }
-            .onEnded { value in
-                guard let delta = WeekSwipeDecision.weekDelta(
-                    translation: value.translation,
-                    predictedEndTranslation: value.predictedEndTranslation
-                ) else { return }
-                moveWeek(by: delta)
-            }
+        } ?? .monday
+    }
+
+    private var firstVisibleSection: Int {
+        courses.filter {
+            !ScheduleEngine.occurrences(for: $0, on: firstVisibleDay.date(inWeekContaining: weekAnchor),
+                                         semesterStart: store.semesterStartDate).isEmpty
+        }.map(\.startSection).min() ?? 1
     }
 
     private func gridLines(dayWidth: CGFloat) -> some View {
@@ -178,95 +206,47 @@ struct ScheduleView: View {
                 }
                 .padding(.top, 6)
                 .frame(width: timeColumnWidth, height: sectionHeight, alignment: .top)
+                .id("section-\(section)")
             }
         }
     }
 
     private func courseBlocks(dayWidth: CGFloat) -> some View {
         ForEach(Weekday.allCases) { day in
-            ForEach(coursePlacements(on: day)) { placement in
-                let course = placement.course
-                let laneWidth = dayWidth / CGFloat(placement.laneCount)
-
+            ForEach(courseGroups(on: day)) { group in
                 Button {
-                    selectedCourse = course
+                    selectedGroup = group
                 } label: {
-                    CourseBlock(course: course, isNarrow: placement.laneCount > 1)
+                    if group.courses.count == 1, let course = group.courses.first {
+                        CourseBlock(course: course)
+                    } else {
+                        OverlappingCoursesBlock(group: group)
+                    }
                 }
                 .buttonStyle(.plain)
                 .frame(
-                    width: max(0, laneWidth - 4),
-                    height: CGFloat(course.sectionCount) * sectionHeight - 6
+                    width: dayWidth - 6,
+                    height: CGFloat(group.endSection - group.startSection + 1) * sectionHeight - 6
                 )
                 .offset(
                     x: timeColumnWidth
                         + CGFloat(day.weekIndex) * dayWidth
-                        + CGFloat(placement.lane) * laneWidth
-                        + 2,
-                    y: CGFloat(course.startSection - 1) * sectionHeight + 3
+                        + 3,
+                    y: CGFloat(group.startSection - 1) * sectionHeight + 3
                 )
                 .accessibilityLabel(
-                    "\(course.name)，\(day.fullName)，第\(course.startSection)到第\(course.endSection)节"
+                    group.courses.map(\.name).joined(separator: "、")
                 )
-                .accessibilityHint("轻点查看课程详情")
+                .accessibilityHint(group.courses.count > 1 ? "轻点查看全部重叠课程" : "轻点查看课程详情")
             }
         }
     }
 
-    private func coursePlacements(on day: Weekday) -> [CoursePlacement] {
-        let courses = store.courses
-            .filter { $0.weekdays.contains(day) && $0.isActive(academicWeek: weekNumber) }
-            .sorted {
-                if $0.startSection == $1.startSection {
-                    return $0.endSection < $1.endSection
-                }
-                return $0.startSection < $1.startSection
-            }
-
-        var placements: [CoursePlacement] = []
-        var overlappingGroup: [Course] = []
-        var groupEndSection = 0
-
-        for course in courses {
-            if !overlappingGroup.isEmpty && course.startSection > groupEndSection {
-                placements.append(contentsOf: lanePlacements(for: overlappingGroup, on: day))
-                overlappingGroup = [course]
-                groupEndSection = course.endSection
-            } else {
-                overlappingGroup.append(course)
-                groupEndSection = max(groupEndSection, course.endSection)
-            }
-        }
-
-        if !overlappingGroup.isEmpty {
-            placements.append(contentsOf: lanePlacements(for: overlappingGroup, on: day))
-        }
-
-        return placements
-    }
-
-    private func lanePlacements(for courses: [Course], on day: Weekday) -> [CoursePlacement] {
-        var laneEndSections: [Int] = []
-        var assignments: [(course: Course, lane: Int)] = []
-
-        for course in courses {
-            let lane = laneEndSections.firstIndex { $0 < course.startSection } ?? laneEndSections.count
-            if lane == laneEndSections.count {
-                laneEndSections.append(course.endSection)
-            } else {
-                laneEndSections[lane] = course.endSection
-            }
-            assignments.append((course, lane))
-        }
-
-        return assignments.map { assignment in
-            CoursePlacement(
-                course: assignment.course,
-                weekday: day,
-                lane: assignment.lane,
-                laneCount: laneEndSections.count
-            )
-        }
+    private func courseGroups(on day: Weekday) -> [TimetableCourseGroup] {
+        TimetableCourseGroup.groups(courses.filter {
+            !ScheduleEngine.occurrences(for: $0, on: day.date(inWeekContaining: weekAnchor),
+                                        semesterStart: store.semesterStartDate).isEmpty
+        })
     }
 
     private func headerButton(
@@ -283,7 +263,8 @@ struct ScheduleView: View {
     }
 
     private var weekNumber: Int {
-        ScheduleEngine.academicWeekNumber(for: weekAnchor, calendar: calendar)
+        return ScheduleEngine.academicWeekNumber(for: weekAnchor, calendar: calendar,
+                                                  semesterStart: store.semesterStartDate)
     }
 
     private var weekRangeText: String {
@@ -363,13 +344,95 @@ private struct CourseBlock: View {
     }
 }
 
-private struct CoursePlacement: Identifiable {
-    let course: Course
-    let weekday: Weekday
-    let lane: Int
-    let laneCount: Int
+struct TimetableCourseGroup: Identifiable {
+    let courses: [Course]
+    var id: UUID { courses[0].id }
+    var startSection: Int { courses.map(\.startSection).min() ?? 1 }
+    var endSection: Int { courses.map(\.endSection).max() ?? 1 }
 
-    var id: String { "\(course.id.uuidString)-\(weekday.rawValue)" }
+    static func groups(_ courses: [Course]) -> [Self] {
+        let sorted = courses.sorted {
+            if $0.startSection != $1.startSection { return $0.startSection < $1.startSection }
+            if $0.endSection != $1.endSection { return $0.endSection < $1.endSection }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        var result: [Self] = []
+        var pending: [Course] = []
+        var end = 0
+        for course in sorted {
+            if !pending.isEmpty && course.startSection > end {
+                result.append(Self(courses: pending))
+                pending = []
+                end = 0
+            }
+            pending.append(course)
+            end = max(end, course.endSection)
+        }
+        if !pending.isEmpty { result.append(Self(courses: pending)) }
+        return result
+    }
+}
+
+private struct OverlappingCoursesBlock: View {
+    let group: TimetableCourseGroup
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("\(group.courses.count)门重叠")
+                .font(.system(size: 12, weight: .bold))
+                .lineLimit(1)
+            Text(group.courses.map(\.name).joined(separator: " / "))
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(group.endSection == group.startSection ? 1 : 4)
+            Spacer(minLength: 0)
+            Text("点开查看").font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(KebiaoTheme.accent, in: RoundedRectangle(cornerRadius: 10))
+        .clipped()
+    }
+}
+
+private struct GroupCourseSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let group: TimetableCourseGroup
+
+    var body: some View {
+        if group.courses.count == 1, let course = group.courses.first {
+            CourseDetailSheet(course: course)
+        } else {
+            NavigationStack {
+                List {
+                    Section {
+                        ForEach(group.courses) { course in
+                            NavigationLink {
+                                CourseDetailSheet(course: course)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(course.name).font(.headline)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Text("第\(course.startSection)–\(course.endSection)节 · \(course.location)")
+                                        .font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 5)
+                            }
+                        }
+                    } footer: {
+                        Text("这些课程的节次有重叠，请核对课程安排；全部课程已保留。")
+                    }
+                }
+                .navigationTitle("\(group.courses.count)门重叠课程")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("完成") { dismiss() }
+                    }
+                }
+            }
+        }
+    }
 }
 
 private struct CourseDetailSheet: View {
@@ -419,7 +482,7 @@ private struct CourseDetailSheet: View {
 
     private var timeRangeText: String {
         let start = course.resolvedStartTimeMinutes
-        let duration = max(45, course.sectionCount * 45 + max(0, course.sectionCount - 1) * 10)
+        let duration = course.resolvedDurationMinutes
         let end = start + duration
         return String(
             format: "%02d:%02d–%02d:%02d",

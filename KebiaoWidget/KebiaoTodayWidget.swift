@@ -28,7 +28,7 @@ struct TodayProvider: TimelineProvider {
                 value: course.resolvedStartTimeMinutes,
                 to: startOfToday
             ) ?? now
-            let duration = max(45, course.sectionCount * 45 + max(0, course.sectionCount - 1) * 10)
+            let duration = course.resolvedDurationMinutes
             let end = calendar.date(byAdding: .minute, value: duration, to: start) ?? start
             return [start, end]
         }
@@ -42,11 +42,7 @@ struct TodayProvider: TimelineProvider {
         let defaults = UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier)
         let courses = defaults?.data(forKey: KebiaoConfiguration.storageKey)
             .flatMap { try? JSONDecoder().decode([Course].self, from: $0) } ?? []
-        let weekday = Weekday.from(calendarWeekday: Calendar.current.component(.weekday, from: date))
-        let academicWeek = ScheduleEngine.academicWeekNumber(for: date)
-        let activeCourses = courses.filter {
-            $0.weekdays.contains(weekday) && $0.isActive(academicWeek: academicWeek)
-        }
+        let activeCourses = ScheduleEngine.courses(in: courses, on: date)
         return TodayEntry(date: date, courses: activeCourses.sorted {
             $0.resolvedStartTimeMinutes < $1.resolvedStartTimeMinutes
         })
@@ -59,6 +55,7 @@ struct KebiaoTodayWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: TodayProvider()) { entry in
             TodayWidgetView(entry: entry)
+                .environment(\.colorScheme, .light)
                 .containerBackground(for: .widget) { Color.indigo.opacity(0.10) }
         }
         .configurationDisplayName("今日课表")
@@ -147,7 +144,7 @@ private struct TodayWidgetView: View {
     }
 
     private func endDate(for course: Course) -> Date {
-        let duration = max(45, course.sectionCount * 45 + max(0, course.sectionCount - 1) * 10)
+        let duration = course.resolvedDurationMinutes
         return Calendar.current.date(byAdding: .minute, value: duration, to: startDate(for: course))
             ?? startDate(for: course)
     }
