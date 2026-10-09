@@ -48,8 +48,8 @@ struct ScheduleView: View {
             ZStack {
                 GeometryReader { geometry in
                     let dayWidth = max(96, (geometry.size.width - timeColumnWidth) / 7)
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        ScrollViewReader { scrollProxy in
+                    ScrollViewReader { scrollProxy in
+                        ScrollView(.horizontal, showsIndicators: true) {
                         VStack(spacing: 0) {
                             weekdayHeader
                             timetable(dayWidth: dayWidth)
