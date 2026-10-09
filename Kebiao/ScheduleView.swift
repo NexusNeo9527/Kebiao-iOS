@@ -49,11 +49,18 @@ struct ScheduleView: View {
                 GeometryReader { geometry in
                     let dayWidth = max(96, (geometry.size.width - timeColumnWidth) / 7)
                     ScrollView(.horizontal, showsIndicators: true) {
+                        ScrollViewReader { scrollProxy in
                         VStack(spacing: 0) {
                             weekdayHeader
                             timetable(dayWidth: dayWidth)
                         }
                         .frame(width: timeColumnWidth + dayWidth * 7)
+                        .onAppear {
+                            if showsNavigationBar {
+                                scrollProxy.scrollTo("day-\(firstVisibleDay.rawValue)", anchor: .center)
+                            }
+                        }
+                        }
                     }
                 }
                 .id(weekPageID)
@@ -122,6 +129,7 @@ struct ScheduleView: View {
                         .foregroundStyle(isToday(date) ? .white : .secondary)
                 }
                 .frame(maxWidth: .infinity)
+                .id("day-\(day.rawValue)")
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(day.fullName)，\(calendar.component(.day, from: date))日")
             }
@@ -130,6 +138,7 @@ struct ScheduleView: View {
     }
 
     private func timetable(dayWidth: CGFloat) -> some View {
+        ScrollViewReader { scrollProxy in
         ScrollView(.vertical, showsIndicators: false) {
             GeometryReader { _ in
                 ZStack(alignment: .topLeading) {
@@ -143,6 +152,28 @@ struct ScheduleView: View {
             .padding(.bottom, 24)
         }
         .contentShape(Rectangle())
+        .onAppear {
+            if showsNavigationBar {
+                scrollProxy.scrollTo("section-\(firstVisibleSection)", anchor: .top)
+            }
+        }
+        }
+    }
+
+    private var firstVisibleDay: Weekday {
+        Weekday.allCases.first { day in
+            courses.contains {
+                !ScheduleEngine.occurrences(for: $0, on: day.date(inWeekContaining: weekAnchor),
+                                             semesterStart: store.semesterStartDate).isEmpty
+            }
+        } ?? .monday
+    }
+
+    private var firstVisibleSection: Int {
+        courses.filter {
+            !ScheduleEngine.occurrences(for: $0, on: firstVisibleDay.date(inWeekContaining: weekAnchor),
+                                         semesterStart: store.semesterStartDate).isEmpty
+        }.map(\.startSection).min() ?? 1
     }
 
     private func gridLines(dayWidth: CGFloat) -> some View {
@@ -175,6 +206,7 @@ struct ScheduleView: View {
                 }
                 .padding(.top, 6)
                 .frame(width: timeColumnWidth, height: sectionHeight, alignment: .top)
+                .id("section-\(section)")
             }
         }
     }
