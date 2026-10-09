@@ -21,6 +21,7 @@ struct ImportScheduleView: View {
         NavigationStack {
             ZStack {
                 KebiaoTheme.background.ignoresSafeArea()
+                ScrollViewReader { scrollProxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         if let completedImport {
@@ -32,10 +33,18 @@ struct ImportScheduleView: View {
                             supportedFormats
                         }
                     }
+                    .id("import-result")
                     .padding(18)
                     .padding(.bottom, 30)
                 }
                 .disabled(isParsingFile)
+                .onChange(of: preview?.courses) { _, courses in
+                    if courses != nil { scrollProxy.scrollTo("import-result", anchor: .top) }
+                }
+                .onChange(of: completedImport != nil) { _, _ in
+                    scrollProxy.scrollTo("import-result", anchor: .top)
+                }
+                }
             }
             .navigationTitle("导入学校课表")
             .navigationBarTitleDisplayMode(.inline)
