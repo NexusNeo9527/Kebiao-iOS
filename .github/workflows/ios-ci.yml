@@ -105,6 +105,16 @@ jobs:
           sleep 3
           xcrun simctl io "$DEVICE_ID" screenshot build/visual-qa/overlap-timetable.png
 
+          xcrun simctl terminate "$DEVICE_ID" com.example.kebiao
+          xcrun simctl launch "$DEVICE_ID" com.example.kebiao --ui-test-import-preview
+          sleep 3
+          xcrun simctl io "$DEVICE_ID" screenshot build/visual-qa/pdf-import-preview.png
+
+          xcrun simctl terminate "$DEVICE_ID" com.example.kebiao
+          xcrun simctl launch "$DEVICE_ID" com.example.kebiao --ui-test-import-complete
+          sleep 3
+          xcrun simctl io "$DEVICE_ID" screenshot build/visual-qa/pdf-import-complete.png
+
       - name: Upload visual QA screenshots
         uses: actions/upload-artifact@v7
         with:

@@ -20,6 +20,31 @@ struct ScheduleImportPreview {
     let format: ScheduleImportFormat
     let courses: [Course]
     let warnings: [String]
+
+    // Open a week containing these courses instead of showing an empty current week.
+    func timetablePreviewDate(reference: Date = .now, semesterStart: Date,
+                              calendar: Calendar = .current) -> Date {
+        let monday = Weekday.monday.date(inWeekContaining: reference, calendar: calendar)
+        for offset in 0..<7 {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: monday) else { continue }
+            if courses.contains(where: {
+                !ScheduleEngine.occurrences(for: $0, on: day, calendar: calendar,
+                                             semesterStart: semesterStart).isEmpty
+            }) { return reference }
+        }
+        let semesterMonday = Weekday.monday.date(inWeekContaining: semesterStart, calendar: calendar)
+        let dates: [Date] = courses.compactMap { course in
+            if let dates = course.scheduledDates { return dates.min() }
+            guard let day = course.weekdays.min(by: { $0.weekIndex < $1.weekIndex }) else { return nil }
+            let week: Int
+            if let weeks = course.activeWeeks {
+                guard let first = weeks.filter({ $0 > 0 }).min() else { return nil }
+                week = first
+            } else { week = course.resolvedStartWeek }
+            return calendar.date(byAdding: .day, value: (week - 1) * 7 + day.weekIndex, to: semesterMonday)
+        }
+        return dates.min() ?? reference
+    }
 }
 
 enum ScheduleImportError: LocalizedError {

@@ -19,6 +19,8 @@ enum WeekSwipeDecision {
 
 struct ScheduleView: View {
     let store: TimetableStore
+    private let previewCourses: [Course]?
+    private let showsNavigationBar: Bool
     @State private var weekAnchor = Date.now
     @State private var selectedGroup: TimetableCourseGroup?
     @State private var weekDirection = 1
@@ -26,9 +28,18 @@ struct ScheduleView: View {
     private let timeColumnWidth: CGFloat = 46
     private let sectionHeight: CGFloat = 76
 
+    init(store: TimetableStore, courses: [Course]? = nil, initialDate: Date = .now,
+         showsNavigationBar: Bool = false) {
+        self.store = store
+        self.previewCourses = courses
+        self.showsNavigationBar = showsNavigationBar
+        _weekAnchor = State(initialValue: initialDate)
+    }
+
     private var calendar: Calendar { .current }
+    private var courses: [Course] { previewCourses ?? store.courses }
     private var sectionCount: Int {
-        max(10, store.courses.map(\.endSection).max() ?? 10)
+        max(10, courses.map(\.endSection).max() ?? 10)
     }
 
     var body: some View {
@@ -51,7 +62,7 @@ struct ScheduleView: View {
             .clipped()
         }
         .background(KebiaoTheme.background.ignoresSafeArea())
-        .navigationBarHidden(true)
+        .navigationBarHidden(!showsNavigationBar)
         .sheet(item: $selectedGroup) { group in
             GroupCourseSheet(group: group)
                 .presentationDetents([.medium, .large])
@@ -200,8 +211,9 @@ struct ScheduleView: View {
     }
 
     private func courseGroups(on day: Weekday) -> [TimetableCourseGroup] {
-        TimetableCourseGroup.groups(store.courses.filter {
-            !ScheduleEngine.occurrences(for: $0, on: day.date(inWeekContaining: weekAnchor)).isEmpty
+        TimetableCourseGroup.groups(courses.filter {
+            !ScheduleEngine.occurrences(for: $0, on: day.date(inWeekContaining: weekAnchor),
+                                        semesterStart: store.semesterStartDate).isEmpty
         })
     }
 
@@ -219,8 +231,8 @@ struct ScheduleView: View {
     }
 
     private var weekNumber: Int {
-        _ = store.semesterStartDate
-        return ScheduleEngine.academicWeekNumber(for: weekAnchor, calendar: calendar)
+        return ScheduleEngine.academicWeekNumber(for: weekAnchor, calendar: calendar,
+                                                  semesterStart: store.semesterStartDate)
     }
 
     private var weekRangeText: String {

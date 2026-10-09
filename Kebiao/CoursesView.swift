@@ -3,6 +3,7 @@ import UIKit
 
 struct CoursesView: View {
     let store: TimetableStore
+    var onShowSchedule: (Date) -> Void = { _ in }
     @State private var presentedSheet: CourseSheet?
 
     var body: some View {
@@ -32,7 +33,7 @@ struct CoursesView: View {
         }
         .navigationTitle("课程")
         .onAppear {
-            if ProcessInfo.processInfo.arguments.contains("--ui-test-import"), presentedSheet == nil {
+            if ProcessInfo.processInfo.arguments.contains(where: { $0.hasPrefix("--ui-test-import") }), presentedSheet == nil {
                 presentedSheet = .importSchedule
             } else if ProcessInfo.processInfo.arguments.contains("--ui-test-add-course"), presentedSheet == nil {
                 presentedSheet = .create
@@ -57,7 +58,10 @@ struct CoursesView: View {
             case .edit(let course):
                 CourseEditorView(course: course, store: store)
             case .importSchedule:
-                ImportScheduleView(store: store)
+                ImportScheduleView(store: store) { date in
+                    presentedSheet = nil
+                    onShowSchedule(date)
+                }
             }
         }
     }

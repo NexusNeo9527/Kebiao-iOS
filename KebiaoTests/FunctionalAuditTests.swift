@@ -2,6 +2,41 @@ import XCTest
 @testable import Kebiao
 
 final class FunctionalAuditTests: XCTestCase {
+    func testImportPreviewKeepsCurrentWeekWhenItContainsCourses() {
+        var value = course()
+        value.activeWeeks = [2, 4]
+        let preview = ScheduleImportPreview(sourceName: "课表.pdf", format: .pdf,
+                                            courses: [value], warnings: [])
+        let reference = date(2026, 9, 16)
+        XCTAssertEqual(preview.timetablePreviewDate(reference: reference,
+                         semesterStart: date(2026, 9, 7), calendar: calendar), reference)
+    }
+
+    func testImportPreviewOpensFirstActiveWeekInsteadOfAnEmptyWeek() {
+        var value = course()
+        value.activeWeeks = [8, 10]
+        let preview = ScheduleImportPreview(sourceName: "课表.pdf", format: .pdf,
+                                            courses: [value], warnings: [])
+        let selected = preview.timetablePreviewDate(reference: date(2026, 9, 16),
+                         semesterStart: date(2026, 9, 7), calendar: calendar)
+        XCTAssertEqual(selected, date(2026, 10, 26))
+        XCTAssertFalse(ScheduleEngine.occurrences(for: value, on: selected, calendar: calendar,
+                         semesterStart: date(2026, 9, 7)).isEmpty)
+    }
+
+    func testImportPreviewUsesExactEventDateAndHandlesEmptySchedules() {
+        var value = course()
+        value.scheduledDates = [date(2027, 1, 13, 10)]
+        let preview = ScheduleImportPreview(sourceName: "课表.ics", format: .ics,
+                                            courses: [value], warnings: [])
+        let reference = date(2026, 9, 16)
+        XCTAssertEqual(preview.timetablePreviewDate(reference: reference,
+                         semesterStart: date(2026, 9, 7), calendar: calendar), date(2027, 1, 13, 10))
+        let empty = ScheduleImportPreview(sourceName: "课表.pdf", format: .pdf, courses: [], warnings: [])
+        XCTAssertEqual(empty.timetablePreviewDate(reference: reference,
+                         semesterStart: date(2026, 9, 7), calendar: calendar), reference)
+    }
+
     func testFourOverlappingCoursesStayInOneGroupWithoutLosingCourses() {
         let courses = (0..<4).map { _ in course() }
         let groups = TimetableCourseGroup.groups(courses)

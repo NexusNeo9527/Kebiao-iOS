@@ -5,8 +5,9 @@ struct AppView: View {
     @State private var selectedTab: AppTab = {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("--ui-test-overlap") { return .schedule }
-        return arguments.contains("--ui-test-add-course") || arguments.contains("--ui-test-import") ? .courses : .day
+        return arguments.contains("--ui-test-add-course") || arguments.contains(where: { $0.hasPrefix("--ui-test-import") }) ? .courses : .day
     }()
+    @State private var scheduleDate = Date.now
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -18,13 +19,17 @@ struct AppView: View {
             .tag(AppTab.day)
 
             NavigationStack {
-                ScheduleView(store: store)
+                ScheduleView(store: store, initialDate: scheduleDate)
+                    .id(scheduleDate)
             }
             .tabItem { Label("课表", systemImage: "calendar") }
             .tag(AppTab.schedule)
 
             NavigationStack {
-                CoursesView(store: store)
+                CoursesView(store: store) { date in
+                    scheduleDate = date
+                    selectedTab = .schedule
+                }
             }
             .tabItem { Label("课程", systemImage: "books.vertical") }
             .tag(AppTab.courses)
