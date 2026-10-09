@@ -22,30 +22,42 @@ struct ScheduleImportPreview {
     let courses: [Course]
     let warnings: [String]
 
-    // Open a week containing these courses instead of showing an empty current week.
+    // The preview uses the target timetable's timezone and bell times, including every slot.
     func timetablePreviewDate(reference: Date = .now, semesterStart: Date,
                               calendar: Calendar = .current) -> Date {
+        let table = Timetable(semesterStartDate: semesterStart, timeZoneIdentifier: calendar.timeZone.identifier,
+            courses: courses)
+        return timetablePreviewDate(reference: reference, in: table)
+    }
+
+    func timetablePreviewDate(reference: Date = .now, in timetable: Timetable) -> Date {
+        var table = timetable
+        table.courses = courses
+        let lastWeek = courses.flatMap(\.timeSlots).map { $0.activeWeeks?.max() ?? $0.resolvedEndWeek }.max() ?? 1
+        table.weekCount = min(30, max(table.weekCount, lastWeek))
+        let calendar = table.calendar
         let monday = Weekday.monday.date(inWeekContaining: reference, calendar: calendar)
         for offset in 0..<7 {
             guard let day = calendar.date(byAdding: .day, value: offset, to: monday) else { continue }
-            if courses.contains(where: {
-                !ScheduleEngine.occurrences(for: $0, on: day, calendar: calendar,
-                                             semesterStart: semesterStart).isEmpty
-            }) { return reference }
+            if !ScheduleEngine.occurrences(in: table, on: day).isEmpty { return reference }
         }
-        let semesterMonday = Weekday.monday.date(inWeekContaining: semesterStart, calendar: calendar)
-        let dates: [Date] = courses.compactMap { course in
-            if let dates = course.scheduledDates { return dates.min() }
-            guard let day = course.weekdays.min(by: { $0.weekIndex < $1.weekIndex }) else { return nil }
-            let week: Int
-            if let weeks = course.activeWeeks {
-                guard let first = weeks.filter({ $0 > 0 }).min() else { return nil }
-                week = first
-            } else { week = course.resolvedStartWeek }
-            return calendar.date(byAdding: .day, value: (week - 1) * 7 + day.weekIndex, to: semesterMonday)
+        let semesterMonday = Weekday.monday.date(inWeekContaining: table.semesterStartDate, calendar: calendar)
+        var candidates = courses.flatMap(\.timeSlots).flatMap { ($0.datedEvents ?? []).map(\.startDate) }
+        candidates += courses.flatMap(\.exceptions).compactMap(\.startDate)
+        for course in courses {
+            for slot in course.timeSlots where slot.datedEvents == nil {
+                for week in 1...table.weekCount where slot.isActive(academicWeek: week) {
+                    for day in slot.weekdays {
+                        if let date = calendar.date(byAdding: .day, value: (week - 1) * 7 + day.weekIndex, to: semesterMonday) {
+                            candidates.append(date)
+                        }
+                    }
+                }
+            }
         }
-        return dates.min() ?? reference
+        return candidates.sorted().first { !ScheduleEngine.occurrences(in: table, on: $0).isEmpty } ?? reference
     }
+
 }
 
 enum ScheduleImportError: LocalizedError {
@@ -252,8 +264,8 @@ enum ScheduleImportService {
             let weeks = pdfWeekNumbers(weekText)
             guard !weeks.isEmpty else { return }
             courses.append(Course(name: title, teacher: pdfField("教师", in: detail),
-                location: pdfField("地点", in: detail), startSection: sections.0,
-                sectionCount: min(4, sections.1 - sections.0 + 1), weekdays: [day],
+                location: pdfField("地点", in: detail), startSection: min(12, max(1, sections.0)),
+                sectionCount: min(13 - min(12, max(1, sections.0)), sections.1 - sections.0 + 1), weekdays: [day],
                 colorValue: palette[title.utf8.reduce(0) { ($0 + Int($1)) % palette.count }],
                 startTimeMinutes: nil, reminderMinutesBefore: 10,
                 startWeek: weeks.min(), endWeek: weeks.max(), activeWeeks: weeks,
@@ -382,7 +394,7 @@ enum ScheduleImportService {
                     teacher: teacher,
                     location: location,
                     startSection: min(12, max(1, sections.0)),
-                    sectionCount: min(4, max(1, sections.1 - sections.0 + 1)),
+                    sectionCount: min(13 - min(12, max(1, sections.0)), max(1, sections.1 - sections.0 + 1)),
                     weekdays: [day],
                     colorValue: palette[colorIndex],
                     startTimeMinutes: nil,
@@ -654,7 +666,7 @@ enum ScheduleImportService {
                 teacher: teacher,
                 location: location,
                 startSection: min(12, max(1, sections.0)),
-                sectionCount: min(4, max(1, sections.1 - sections.0 + 1)),
+                sectionCount: min(13 - min(12, max(1, sections.0)), max(1, sections.1 - sections.0 + 1)),
                 weekdays: weekdays,
                 colorValue: palette[colorIndex],
                 startTimeMinutes: nil,
@@ -816,16 +828,44 @@ enum ScheduleImportService {
         var courses: [Course] = []
         var warnings: [String] = []
         for (index, object) in objects.enumerated() {
-            if object["id"] != nil && object["colorValue"] != nil {
-                guard let data = try? JSONSerialization.data(withJSONObject: object),
+            if object["timeSlots"] != nil || (object["id"] != nil && object["colorValue"] != nil) {
+                var native = object
+                if let slots = object["timeSlots"] as? [[String: Any]] {
+                    guard !slots.isEmpty else {
+                        warnings.append("第 \(index + 1) 条没有上课时段，已跳过")
+                        continue
+                    }
+                    native["id"] = native["id"] ?? UUID().uuidString
+                    native["colorValue"] = native["colorValue"] ?? palette[index % palette.count]
+                    native["timeSlots"] = slots.map { value -> [String: Any] in
+                        var slot = value
+                        let defaults: [String: Any] = ["id": UUID().uuidString, "teacher": "", "location": "",
+                            "startSection": 1, "sectionCount": 2, "weekdays": [Weekday.monday.rawValue]]
+                        for (key, value) in defaults where slot[key] == nil { slot[key] = value }
+                        if let events = slot["datedEvents"] as? [[String: Any]] {
+                            slot["datedEvents"] = events.map { value -> [String: Any] in
+                                var event = value
+                                event["id"] = event["id"] ?? UUID().uuidString
+                                return event
+                            }
+                        }
+                        return slot
+                    }
+                }
+                guard let data = try? JSONSerialization.data(withJSONObject: native),
                       var course = try? JSONDecoder().decode(Course.self, from: data) else {
                     warnings.append("第 \(index + 1) 条原生课程数据无效，已跳过")
                     continue
                 }
                 course.normalize()
+                guard (try? course.validate()) != nil else {
+                    warnings.append("第 \(index + 1) 条原生课程安排无效，已跳过")
+                    continue
+                }
                 courses.append(course)
                 continue
             }
+
             var record: [String: String] = [:]
             for (key, value) in object {
                 record[normalizedKey(key)] = stringValue(value)
@@ -1006,7 +1046,7 @@ enum ScheduleImportService {
             teacher: value(in: record, keys: ["teacher", "instructor", "老师", "教师", "任课教师", "任课老师"]),
             location: value(in: record, keys: ["location", "classroom", "room", "教室", "地点", "上课地点", "教学地点"]),
             startSection: min(12, max(1, section)),
-            sectionCount: min(4, max(1, count)),
+            sectionCount: min(13 - min(12, max(1, section)), max(1, count)),
             weekdays: weekdays,
             colorValue: color,
             startTimeMinutes: time,

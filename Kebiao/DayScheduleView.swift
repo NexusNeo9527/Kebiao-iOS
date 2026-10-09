@@ -5,20 +5,19 @@ struct DayScheduleView: View {
     @State private var selectedDate = Date.now
     @State private var now = Date.now
     @Environment(\.scenePhase) private var scenePhase
-    @State private var presentedCourse: Course?
-    @State private var creatingCourse = false
+    @State private var presentedSheet: DayScheduleSheet?
     @State private var completedExpanded = true
 
+    private var timetable: Timetable { store.activeTimetable }
+    private var calendar: Calendar { timetable.calendar }
     private var weekday: Weekday {
-        Weekday.from(calendarWeekday: Calendar.current.component(.weekday, from: selectedDate))
+        Weekday.from(calendarWeekday: calendar.component(.weekday, from: selectedDate))
     }
-
-    private var courses: [Course] {
-        _ = store.semesterStartDate
-        return ScheduleEngine.courses(in: store.courses, on: selectedDate)
+    private var occurrences: [CourseOccurrence] {
+        ScheduleEngine.occurrences(in: timetable, on: selectedDate)
     }
-    private var completed: [Course] { courses.filter { endDate(for: $0) <= now && Calendar.current.isDateInToday(selectedDate) } }
-    private var upcoming: [Course] { courses.filter { !completed.contains($0) } }
+    private var completed: [CourseOccurrence] { occurrences.filter { $0.endDate <= now } }
+    private var upcoming: [CourseOccurrence] { occurrences.filter { $0.endDate > now } }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -27,7 +26,7 @@ struct DayScheduleView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     dateHeader
 
-                    if Calendar.current.isDateInToday(selectedDate), let next = upcoming.first {
+                    if calendar.isDate(selectedDate, inSameDayAs: now), let next = upcoming.first {
                         nextCourseCard(next)
                     }
 
@@ -37,7 +36,7 @@ struct DayScheduleView: View {
 
                     if upcoming.isEmpty, completed.isEmpty {
                         ContentUnavailableView(
-                            "今天没有课程",
+                            "当天没有课程",
                             systemImage: "calendar.badge.checkmark",
                             description: Text("轻点右下角添加课程，或到课程页导入学校课表。")
                         )
@@ -55,7 +54,7 @@ struct DayScheduleView: View {
             }
 
             Button {
-                creatingCourse = true
+                presentedSheet = .create
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 25, weight: .medium))
@@ -78,11 +77,14 @@ struct DayScheduleView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { now = .now }
         }
-        .sheet(isPresented: $creatingCourse) {
-            CourseEditorView(course: nil, store: store)
-        }
-        .sheet(item: $presentedCourse) { course in
-            CourseEditorView(course: course, store: store)
+        .onChange(of: store.activeTimetableID) { _, _ in presentedSheet = nil }
+        .sheet(item: $presentedSheet) { sheet in
+            switch sheet {
+            case .create: CourseEditorView(course: nil, store: store)
+            case .edit(let course): CourseEditorView(course: course, store: store)
+            case .adjust(let occurrence): OccurrenceAdjustmentView(store: store, occurrence: occurrence)
+            case .occurrence(let occurrence): occurrenceDetails(occurrence)
+            }
         }
     }
 
@@ -91,9 +93,10 @@ struct DayScheduleView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(dateTitle)
                     .font(.title2.weight(.bold))
-                Text(weekday.fullName)
+                Text("\(timetable.name) · \(weekday.fullName)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer()
             HStack(spacing: 8) {
@@ -106,21 +109,21 @@ struct DayScheduleView: View {
         }
     }
 
-    private func nextCourseCard(_ course: Course) -> some View {
+    private func nextCourseCard(_ occurrence: CourseOccurrence) -> some View {
         KebiaoCard {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Label("下一节课", systemImage: "clock.badge")
+                    Label(occurrence.startDate <= now ? "正在上课" : "下一节课", systemImage: "clock.badge")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(KebiaoTheme.accent)
                     Spacer()
-                    Text(timeRange(course))
+                    Text(timeRange(occurrence))
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Text(course.name)
+                Text(occurrence.course.name)
                     .font(.title3.weight(.bold))
-                Label(course.location.isEmpty ? "暂未填写教室" : course.location, systemImage: "mappin.and.ellipse")
+                Label(locationText(occurrence), systemImage: "mappin.and.ellipse")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -151,27 +154,27 @@ struct DayScheduleView: View {
         }
     }
 
-    private func courseButton(_ course: Course) -> some View {
-        Button { presentedCourse = course } label: {
+    private func courseButton(_ occurrence: CourseOccurrence) -> some View {
+        Button { presentedSheet = .occurrence(occurrence) } label: {
             HStack(spacing: 16) {
                 VStack(alignment: .trailing, spacing: 6) {
-                    Text(startText(course))
-                    Text(endText(course))
+                    Text(timeText(occurrence.startDate))
+                    Text(timeText(occurrence.endDate))
                 }
                 .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 48)
 
                 Capsule()
-                    .fill(course.color)
+                    .fill(occurrence.course.color)
                     .frame(width: 6, height: 62)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(course.name)
+                    Text(occurrence.course.name)
                         .font(.headline)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Label(course.location.isEmpty ? "暂未填写教室" : course.location, systemImage: "mappin.and.ellipse")
+                    Label(locationText(occurrence), systemImage: "mappin.and.ellipse")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -188,7 +191,7 @@ struct DayScheduleView: View {
             .background(.white, in: RoundedRectangle(cornerRadius: KebiaoTheme.cardRadius, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityHint("轻点查看并编辑课程详情")
+        .accessibilityHint("轻点查看本次课程，编辑课程或调整本次安排")
     }
 
     private func dateButton(_ image: String, label: String, action: @escaping () -> Void) -> some View {
@@ -201,27 +204,63 @@ struct DayScheduleView: View {
 
     private func moveDay(_ value: Int) {
         withAnimation(.snappy) {
-            selectedDate = Calendar.current.date(byAdding: .day, value: value, to: selectedDate) ?? selectedDate
+            selectedDate = calendar.date(byAdding: .day, value: value, to: selectedDate) ?? selectedDate
         }
     }
 
-    private func startText(_ course: Course) -> String { minuteText(course.resolvedStartTimeMinutes) }
-    private func endText(_ course: Course) -> String {
-        let duration = course.resolvedDurationMinutes
-        return minuteText(course.resolvedStartTimeMinutes + duration)
-    }
-    private func timeRange(_ course: Course) -> String { "\(startText(course))–\(endText(course))" }
-    private func minuteText(_ minutes: Int) -> String { String(format: "%02d:%02d", minutes / 60, minutes % 60) }
-    private func endDate(for course: Course) -> Date {
-        let start = Calendar.current.startOfDay(for: selectedDate)
-        let duration = course.resolvedDurationMinutes
-        return Calendar.current.date(byAdding: .minute, value: course.resolvedStartTimeMinutes + duration, to: start) ?? start
+    private func occurrenceDetails(_ occurrence: CourseOccurrence) -> some View {
+        NavigationStack {
+            Form {
+                Section("本次课程") {
+                    LabeledContent("课程", value: occurrence.course.name)
+                    LabeledContent("日期", value: formatted(occurrence.startDate, pattern: "yyyy/M/d"))
+                    LabeledContent("时间", value: timeRange(occurrence))
+                    LabeledContent("教师", value: occurrence.teacher.isEmpty ? "未填写" : occurrence.teacher)
+                    LabeledContent("教室", value: locationText(occurrence))
+                }
+                Section {
+                    Button("仅调整本次安排") { presentedSheet = .adjust(occurrence) }
+                    Button("编辑整门课程") {
+                        if let course = timetable.courses.first(where: { $0.id == occurrence.courseID }) {
+                            presentedSheet = .edit(course)
+                        }
+                    }
+                } footer: {
+                    Text("调整本次仅影响这个日期；编辑整门课程会修改其全部上课安排。")
+                }
+            }
+            .navigationTitle("课程详情")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("完成") { presentedSheet = nil } }
+            }
+        }
     }
 
-    private var dateTitle: String {
+    private func locationText(_ occurrence: CourseOccurrence) -> String {
+        occurrence.location.isEmpty ? "暂未填写教室" : occurrence.location
+    }
+    private func timeRange(_ occurrence: CourseOccurrence) -> String { "\(timeText(occurrence.startDate))–\(timeText(occurrence.endDate))" }
+    private func timeText(_ date: Date) -> String { formatted(date, pattern: "HH:mm") }
+    private var dateTitle: String { formatted(selectedDate, pattern: "yyyy/M/d") }
+    private func formatted(_ date: Date, pattern: String) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "yyyy/M/d"
-        return formatter.string(from: selectedDate)
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = pattern
+        return formatter.string(from: date)
+    }
+}
+
+private enum DayScheduleSheet: Identifiable {
+    case create, occurrence(CourseOccurrence), edit(Course), adjust(CourseOccurrence)
+    var id: String {
+        switch self {
+        case .create: "create"
+        case .occurrence(let occurrence): "occurrence-\(occurrence.id)"
+        case .edit(let course): "edit-\(course.id)"
+        case .adjust(let occurrence): "adjust-\(occurrence.id)"
+        }
     }
 }

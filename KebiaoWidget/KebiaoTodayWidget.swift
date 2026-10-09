@@ -3,49 +3,71 @@ import WidgetKit
 
 struct TodayEntry: TimelineEntry {
     let date: Date
-    let courses: [Course]
+    let timetableName: String
+    let timeZoneIdentifier: String
+    let occurrences: [CourseOccurrence]
+
+    var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: timeZoneIdentifier) ?? .current
+        calendar.firstWeekday = 2
+        return calendar
+    }
 }
 
 struct TodayProvider: TimelineProvider {
     func placeholder(in context: Context) -> TodayEntry {
-        TodayEntry(date: .now, courses: Array(Course.samples.prefix(2)))
+        let now = Date.now
+        let occurrences = Course.samples.prefix(2).enumerated().map { index, course in
+            let start = now.addingTimeInterval(Double((index + 1) * 3600))
+            return CourseOccurrence(course: course, startDate: start,
+                endDate: start.addingTimeInterval(Double(course.resolvedDurationMinutes * 60)))
+        }
+        return TodayEntry(date: now, timetableName: "示例课表", timeZoneIdentifier: TimeZone.current.identifier,
+            occurrences: occurrences)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (TodayEntry) -> Void) {
-        completion(entry(for: .now))
+        completion(entry(for: .now, timetable: loadTimetable()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<TodayEntry>) -> Void) {
         let now = Date()
-        let calendar = Calendar.current
+        let timetable = loadTimetable()
+        let calendar = timetable?.calendar ?? Calendar.current
         let startOfToday = calendar.startOfDay(for: now)
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday)
             ?? now.addingTimeInterval(86_400)
-        let todayCourses = entry(for: now).courses
-        let courseBoundaries = todayCourses.flatMap { course -> [Date] in
-            let start = calendar.date(
-                byAdding: .minute,
-                value: course.resolvedStartTimeMinutes,
-                to: startOfToday
-            ) ?? now
-            let duration = course.resolvedDurationMinutes
-            let end = calendar.date(byAdding: .minute, value: duration, to: start) ?? start
-            return [start, end]
-        }
+        let courseBoundaries = entry(for: now, timetable: timetable).occurrences.flatMap { [$0.startDate, $0.endDate] }
         let refreshDates = Array(Set([now, tomorrow] + courseBoundaries)
             .filter { $0 >= now }
             .sorted())
-        completion(Timeline(entries: refreshDates.map { entry(for: $0) }, policy: .after(tomorrow)))
+        completion(Timeline(entries: refreshDates.map { entry(for: $0, timetable: timetable) }, policy: .after(tomorrow)))
     }
 
-    private func entry(for date: Date) -> TodayEntry {
+    private func loadTimetable() -> Timetable? {
         let defaults = UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier)
+        if let data = defaults?.data(forKey: KebiaoConfiguration.collectionStorageKey) {
+            guard let collection = try? JSONDecoder().decode(TimetableCollection.self, from: data),
+                  collection.version == 2 else { return nil }
+            do {
+                try collection.validate()
+                return collection.activeTimetable
+            } catch { return nil }
+        }
+        // Read the previous app's course-only storage until its first v2 save.
         let courses = defaults?.data(forKey: KebiaoConfiguration.storageKey)
             .flatMap { try? JSONDecoder().decode([Course].self, from: $0) } ?? []
-        let activeCourses = ScheduleEngine.courses(in: courses, on: date)
-        return TodayEntry(date: date, courses: activeCourses.sorted {
-            $0.resolvedStartTimeMinutes < $1.resolvedStartTimeMinutes
-        })
+        let semesterStart = defaults?.object(forKey: KebiaoConfiguration.semesterStartKey) as? Double
+        return Timetable(name: "默认课表",
+            semesterStartDate: semesterStart.map { Date(timeIntervalSince1970: $0) } ?? ScheduleEngine.semesterStart(for: .now),
+            weekCount: 30, courses: courses)
+    }
+
+    private func entry(for date: Date, timetable: Timetable?) -> TodayEntry {
+        TodayEntry(date: date, timetableName: timetable?.name ?? "今日课表",
+            timeZoneIdentifier: timetable?.timeZoneIdentifier ?? TimeZone.current.identifier,
+            occurrences: timetable.map { ScheduleEngine.occurrences(in: $0, on: date) } ?? [])
     }
 }
 
@@ -72,15 +94,16 @@ private struct TodayWidgetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("今日课表", systemImage: "calendar")
+                Label(entry.timetableName, systemImage: "calendar")
                     .font(.headline)
+                    .lineLimit(1)
                 Spacer()
-                Text(entry.date, format: .dateTime.weekday(.wide))
+                Text(Weekday.from(calendarWeekday: entry.calendar.component(.weekday, from: entry.date)).fullName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            if entry.courses.isEmpty {
+            if entry.occurrences.isEmpty {
                 Spacer()
                 Text("今天没有课程")
                     .font(.title3.weight(.semibold))
@@ -89,23 +112,23 @@ private struct TodayWidgetView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
-                ForEach(visibleCourses) { course in
+                ForEach(visibleOccurrences) { occurrence in
                     HStack(spacing: 8) {
                         RoundedRectangle(cornerRadius: 3)
-                            .fill(course.color)
+                            .fill(occurrence.course.color)
                             .frame(width: 4, height: 28)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(course.name)
+                            Text(occurrence.course.name)
                                 .font(.subheadline.weight(.semibold))
                                 .lineLimit(1)
-                            Text(courseStatus(course))
+                            Text(courseStatus(occurrence))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
                         Spacer(minLength: 0)
                         if family == .systemMedium {
-                            Text(course.location)
+                            Text(occurrence.location)
                                 .font(.caption)
                                 .lineLimit(1)
                                 .foregroundStyle(.secondary)
@@ -119,41 +142,32 @@ private struct TodayWidgetView: View {
         .widgetURL(KebiaoConfiguration.scheduleURL)
     }
 
-    private var visibleCourses: [Course] {
-        let sorted = entry.courses.sorted { lhs, rhs in
-            let lhsStart = startDate(for: lhs)
-            let rhsStart = startDate(for: rhs)
-            let lhsIsCurrent = entry.date >= lhsStart && entry.date < endDate(for: lhs)
-            let rhsIsCurrent = entry.date >= rhsStart && entry.date < endDate(for: rhs)
+    private var visibleOccurrences: [CourseOccurrence] {
+        let sorted = entry.occurrences.sorted { lhs, rhs in
+            let lhsStart = lhs.startDate
+            let rhsStart = rhs.startDate
+            let lhsIsCurrent = entry.date >= lhsStart && entry.date < lhs.endDate
+            let rhsIsCurrent = entry.date >= rhsStart && entry.date < rhs.endDate
             if lhsIsCurrent != rhsIsCurrent { return lhsIsCurrent }
 
             let lhsIsUpcoming = lhsStart >= entry.date
             let rhsIsUpcoming = rhsStart >= entry.date
             if lhsIsUpcoming != rhsIsUpcoming { return lhsIsUpcoming }
+            if lhsStart == rhsStart { return lhs.id < rhs.id }
             return lhsIsUpcoming ? lhsStart < rhsStart : lhsStart > rhsStart
         }
         return Array(sorted.prefix(family == .systemSmall ? 2 : 4))
     }
 
-    private func startDate(for course: Course) -> Date {
-        Calendar.current.date(
-            byAdding: .minute,
-            value: course.resolvedStartTimeMinutes,
-            to: Calendar.current.startOfDay(for: entry.date)
-        ) ?? entry.date
-    }
-
-    private func endDate(for course: Course) -> Date {
-        let duration = course.resolvedDurationMinutes
-        return Calendar.current.date(byAdding: .minute, value: duration, to: startDate(for: course))
-            ?? startDate(for: course)
-    }
-
-    private func courseStatus(_ course: Course) -> String {
-        let start = startDate(for: course)
-        if entry.date >= start && entry.date < endDate(for: course) {
+    private func courseStatus(_ occurrence: CourseOccurrence) -> String {
+        let course = occurrence.course
+        if entry.date >= occurrence.startDate && entry.date < occurrence.endDate {
             return "进行中 · 第\(course.startSection)–\(course.endSection)节"
         }
-        return "\(start.formatted(date: .omitted, time: .shortened)) · 第\(course.startSection)–\(course.endSection)节"
+        let formatter = DateFormatter()
+        formatter.calendar = entry.calendar
+        formatter.timeZone = entry.calendar.timeZone
+        formatter.dateFormat = "HH:mm"
+        return "\(formatter.string(from: occurrence.startDate)) · 第\(course.startSection)–\(course.endSection)节"
     }
 }

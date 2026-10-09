@@ -14,11 +14,12 @@ struct ReminderSettingsView: View {
         let activityStatus = LiveActivityCoordinator.status
         Form {
             Section("学期设置") {
-                DatePicker("第一周所在日期", selection: Binding(
-                    get: { store.semesterStartDate },
-                    set: { store.semesterStartDate = $0 }
-                ), displayedComponents: .date)
-                Text("选择学校本学期第一周内的任意一天，课表、提醒和小组件会使用同一周次。")
+                NavigationLink {
+                    TimetableSettingsView(store: store)
+                } label: {
+                    LabeledContent("当前课表", value: store.activeTimetable.name)
+                }
+                Text("设置当前课表的学期、周数、时区与作息时间。日程、提醒和小组件共用这些安排。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section {
@@ -86,7 +87,7 @@ struct ReminderSettingsView: View {
         }
         .navigationTitle("上课提醒")
         .task {
-            await LiveActivityCoordinator.refresh(courses: store.courses)
+            await LiveActivityCoordinator.refresh(timetable: store.activeTimetable)
         }
         .onChange(of: remindersEnabled) { _, enabled in
             updateReminderState(enabled)
@@ -94,7 +95,7 @@ struct ReminderSettingsView: View {
         .onChange(of: liveActivitiesEnabled) { _, _ in
             Task {
                 await LiveActivityCoordinator.endAll()
-                await LiveActivityCoordinator.refresh(courses: store.courses)
+                await LiveActivityCoordinator.refresh(timetable: store.activeTimetable)
             }
         }
     }
@@ -103,7 +104,8 @@ struct ReminderSettingsView: View {
         isRequesting = true
         Task {
             if enabled {
-                let granted = await ReminderScheduler.shared.requestAuthorizationAndReschedule(courses: store.courses)
+                let timetable = store.activeTimetable
+                let granted = await ReminderScheduler.shared.requestAuthorizationAndReschedule(timetable: timetable)
                 remindersEnabled = granted
                 statusMessage = granted ? "上课通知已开启。" : "通知权限未开启，请到系统设置中允许通知。"
             } else {
@@ -118,19 +120,18 @@ struct ReminderSettingsView: View {
         isStartingActivity = true
         Task {
             await LiveActivityCoordinator.endAll()
-            await LiveActivityCoordinator.refresh(courses: store.courses)
+            await LiveActivityCoordinator.refresh(timetable: store.activeTimetable)
             isStartingActivity = false
         }
     }
 
     private func previewLiveActivity() {
-        let course = ScheduleEngine.currentOrUpcomingOccurrence(in: store.courses, at: .now)?.course
-            ?? store.courses.first
-        guard let course else { return }
+        let timetable = store.activeTimetable
+        guard !timetable.courses.isEmpty else { return }
         isStartingActivity = true
         Task {
             do {
-                try await LiveActivityCoordinator.preview(course: course)
+                try await LiveActivityCoordinator.preview(timetable: timetable)
                 statusMessage = nil
             } catch {
                 statusMessage = error.localizedDescription

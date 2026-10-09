@@ -12,7 +12,7 @@ jobs:
   build:
     name: Build iOS app and widget
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       # Xcode 16.4 is the macOS 15 image default and has the installed iOS 18.5
       # simulator device set. Newer Xcode SDKs can exist without an attached
@@ -71,6 +71,23 @@ jobs:
             mkdir -p build/visual-qa
             xcrun xcresulttool export attachments --path build/TestResults.xcresult --output-path build/visual-qa
           fi
+
+      - name: Verify core flows on a small iPhone and iPad
+        run: |
+          set -euo pipefail
+          for DEVICE_TYPE in com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation com.apple.CoreSimulator.SimDeviceType.iPad-Air-11-inch-M3; do
+            RUNTIME_ID=$(xcrun simctl list runtimes available -j | jq -r '.runtimes | map(select(.isAvailable == true and .version == "18.5" and (.identifier | contains("iOS")))) | first | .identifier')
+            DEVICE_ID=$(xcrun simctl create "Kebiao Core QA" "$DEVICE_TYPE" "$RUNTIME_ID")
+            xcrun simctl boot "$DEVICE_ID"
+            xcrun simctl bootstatus "$DEVICE_ID" -b
+            LABEL=${DEVICE_TYPE##*.}
+            xcodebuild -project Kebiao.xcodeproj -scheme Kebiao -sdk iphonesimulator \
+              -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath build/DerivedData \
+              -resultBundlePath "build/Core-$LABEL.xcresult" -only-testing:KebiaoUITests/CoreFeaturesUITests \
+              CODE_SIGNING_ALLOWED=NO test
+            xcrun xcresulttool export attachments --path "build/Core-$LABEL.xcresult" --output-path "build/visual-qa/$LABEL"
+            xcrun simctl shutdown "$DEVICE_ID"
+          done
 
       - name: Upload test results
         if: always()

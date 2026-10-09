@@ -14,4 +14,6 @@ struct ClassActivityAttributes: ActivityAttributes {
     let endSection: Int
     let startDate: Date
     let endDate: Date
+    var occurrenceID: String? = nil
+    var timeZoneIdentifier: String? = nil
 }
