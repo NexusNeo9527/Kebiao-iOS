@@ -31,7 +31,10 @@ final class CoreFeaturesUITests: XCTestCase {
 
     func testEditingSharedNamePreservesExactWeeksAndMultipleSlots() {
         let app = launch()
-        app.tabBars.buttons["课程"].tap()
+        let tabBarCourse = app.tabBars.buttons["课程"]
+        let courseTab = tabBarCourse.exists ? tabBarCourse : app.buttons["课程"].firstMatch
+        XCTAssertTrue(courseTab.waitForExistence(timeout: 5))
+        courseTab.tap()
         app.staticTexts["多时段测试课程"].tap()
         let field = app.textFields["输入课程名称"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
