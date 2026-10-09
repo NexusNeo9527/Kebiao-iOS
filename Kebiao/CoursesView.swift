@@ -11,24 +11,17 @@ struct CoursesView: View {
             KebiaoTheme.background.ignoresSafeArea()
             ScrollView {
                 LazyVStack(spacing: 12) {
+                    Text(store.activeTimetable.name).font(.subheadline).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     if store.courses.isEmpty {
-                        ContentUnavailableView(
-                            "还没有课程",
-                            systemImage: "books.vertical",
-                            description: Text("添加一门课程，或从学校教务系统导入课表。")
-                        )
-                        .padding(.top, 90)
+                        ContentUnavailableView("还没有课程", systemImage: "books.vertical",
+                            description: Text("添加一门课程，或从学校教务系统导入课表。")).padding(.top, 70)
                     } else {
                         ForEach(store.courses.sorted { $0.name < $1.name }) { course in
-                            Button { presentedSheet = .edit(course) } label: {
-                                courseRow(course)
-                            }
-                            .buttonStyle(.plain)
+                            Button { presentedSheet = .edit(course) } label: { courseRow(course) }.buttonStyle(.plain)
                         }
                     }
-                }
-                .padding(18)
-                .padding(.bottom, 30)
+                }.padding(18).padding(.bottom, 30)
             }
         }
         .navigationTitle("课程")
@@ -41,82 +34,53 @@ struct CoursesView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { presentedSheet = .importSchedule } label: {
-                    Image(systemName: "tray.and.arrow.down")
-                }
-                .accessibilityLabel("导入学校课表")
-                Button { presentedSheet = .create } label: {
-                    Image(systemName: "plus")
-                }
-                .accessibilityLabel("添加课程")
+                Button { presentedSheet = .importSchedule } label: { Image(systemName: "tray.and.arrow.down") }
+                    .accessibilityLabel("导入学校课表").disabled(store.isReadOnly)
+                Button { presentedSheet = .create } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("添加课程").disabled(store.isReadOnly)
             }
         }
         .sheet(item: $presentedSheet) { destination in
             switch destination {
-            case .create:
-                CourseEditorView(course: nil, store: store)
-            case .edit(let course):
-                CourseEditorView(course: course, store: store)
+            case .create: CourseEditorView(course: nil, store: store)
+            case .edit(let course): CourseEditorView(course: course, store: store)
             case .importSchedule:
-                ImportScheduleView(store: store) { date in
-                    presentedSheet = nil
-                    onShowSchedule(date)
-                }
+                ImportScheduleView(store: store) { date in presentedSheet = nil; onShowSchedule(date) }
             }
         }
     }
 
     private func courseRow(_ course: Course) -> some View {
         HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 3)
-                .fill(course.color)
-                .frame(width: 6, height: 56)
+            RoundedRectangle(cornerRadius: 3).fill(course.color).frame(width: 6, height: 56)
             VStack(alignment: .leading, spacing: 7) {
-                Text(course.name)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                HStack(spacing: 10) {
-                    Label(course.weekdays.sorted { $0.weekIndex < $1.weekIndex }.map(\.shortName).joined(separator: "、"), systemImage: "calendar")
-                    Label("第\(course.startSection)–\(course.endSection)节", systemImage: "clock")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                Text(course.name).font(.headline).foregroundStyle(.primary).lineLimit(2)
+                Text(CourseScheduleText.summary(for: course)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(18)
-        .background(.white, in: RoundedRectangle(cornerRadius: KebiaoTheme.cardRadius, style: .continuous))
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+        }.padding(18)
+            .background(.white, in: RoundedRectangle(cornerRadius: KebiaoTheme.cardRadius, style: .continuous))
     }
 }
 
 struct CourseEditorView: View {
     let course: Course?
     let store: TimetableStore
+    private let timetable: Timetable
     @Environment(\.dismiss) private var dismiss
     @State private var draft: Course
     @State private var showingDeleteConfirmation = false
+    @State private var saveError: String?
 
-    init(course: Course?, store: TimetableStore) {
+    init(course: Course?, store: TimetableStore, timetable: Timetable? = nil) {
         self.course = course
         self.store = store
-        _draft = State(initialValue: course ?? Course(
-            name: "",
-            teacher: "",
-            location: "",
-            startSection: 1,
-            sectionCount: 2,
-            weekdays: [.monday],
-            colorValue: 0xFF4B68,
-            startTimeMinutes: nil,
-            reminderMinutesBefore: 10,
-            startWeek: 1,
-            endWeek: 20
-        ))
+        let target = timetable ?? store.activeTimetable
+        self.timetable = target
+        _draft = State(initialValue: course ?? Course(name: "", colorValue: 0xFF4B68,
+            timeSlots: [CourseTimeSlot(sectionCount: min(2, target.sectionPeriods.count),
+                startWeek: 1, endWeek: target.weekCount)]))
     }
 
     var body: some View {
@@ -126,310 +90,154 @@ struct CourseEditorView: View {
                 ScrollView {
                     VStack(spacing: 18) {
                         identityCard
-                        periodCard
-                        reminderCard
+                        ForEach(Array(draft.timeSlots.enumerated()), id: \.element.id) { index, slot in
+                            CourseTimeSlotEditor(slot: slotBinding(id: slot.id), number: index + 1, timetable: timetable,
+                                canDelete: draft.timeSlots.count > 1, onDuplicate: { duplicateSlot(slot) },
+                                onDelete: { draft.timeSlots.removeAll { $0.id == slot.id }; draft.exceptions.removeAll { $0.slotID == slot.id } })
+                        }
+                        Button {
+                            let slot = CourseTimeSlot(sectionCount: min(2, timetable.sectionPeriods.count),
+                                startWeek: 1, endWeek: timetable.weekCount)
+                            draft.timeSlots.append(slot)
+                        } label: {
+                            Label("添加上课时段", systemImage: "plus.circle").frame(maxWidth: .infinity).padding(.vertical, 8)
+                        }.buttonStyle(.bordered).tint(KebiaoTheme.accent)
+                        if !draft.exceptions.isEmpty { adjustmentHistory }
                         if course != nil { managementButtons }
-                    }
-                    .padding(18)
-                    .padding(.bottom, 30)
+                    }.padding(18).padding(.bottom, 30).disabled(store.isReadOnly)
                 }
+                .accessibilityIdentifier("course-editor-scroll")
             }
-            .navigationTitle(course == nil ? "添加课程" : "编辑课程")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(course == nil ? "添加课程" : "编辑整门课").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("关闭")
-                }
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { store.save(draft); dismiss() }
-                        .fontWeight(.semibold)
-                        .foregroundStyle(KebiaoTheme.accent)
-                        .disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("保存") {
+                        if store.save(draft, into: timetable.id) { dismiss() }
+                        else { saveError = store.errorMessage ?? "课程未能保存，请重试。" }
+                    }.fontWeight(.semibold).foregroundStyle(KebiaoTheme.accent)
+                        .disabled(!CourseScheduleText.isValid(draft) || store.isReadOnly)
                 }
             }
             .confirmationDialog("删除这门课程？", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
                 Button("删除课程", role: .destructive) {
-                    if let course { store.delete(course) }
+                    if let course, !store.delete(course, from: timetable.id) { saveError = store.errorMessage; return }
                     dismiss()
                 }
                 Button("取消", role: .cancel) {}
-            } message: {
-                Text("此操作会同时更新提醒和灵动岛中的下一节课。")
-            }
+            } message: { Text("这门课程的全部时段和临时调整也会删除。") }
+            .alert("无法保存", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+                Button("知道了", role: .cancel) { saveError = nil }
+            } message: { Text(saveError ?? "") }
         }
     }
 
     private var identityCard: some View {
-        VStack(spacing: 0) {
-            TextField("输入课程名称", text: $draft.name)
-                .font(.title2.weight(.semibold))
-                .padding(.vertical, 22)
-
-            Divider()
-            editorRow(icon: "paintpalette", title: "颜色") {
-                ColorPicker("颜色", selection: colorBinding, supportsOpacity: false)
-                    .labelsHidden()
-            }
-            Divider()
-            editorRow(icon: "star.circle", title: "学分") {
-                TextField("选填", text: creditsBinding)
-                    .multilineTextAlignment(.trailing)
-                    .keyboardType(.decimalPad)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 90)
-            }
-        }
-        .padding(.horizontal, 18)
-        .background(.white, in: RoundedRectangle(cornerRadius: KebiaoTheme.cardRadius, style: .continuous))
-    }
-
-    private var periodCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("时段 1")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 12)
-
-            VStack(spacing: 0) {
-                editorRow(icon: "calendar", title: "周数") {
-                    HStack(spacing: 4) {
-                        counterControl(value: startWeekBinding, range: 1...30, label: "开始周")
-                        Text("–")
-                        counterControl(value: endWeekBinding, range: draft.resolvedStartWeek...30, label: "结束周")
-                        Text("周")
-                    }
-                    .font(.subheadline)
-                }
-                .disabled(draft.scheduledDates != nil)
-                if let dates = draft.scheduledDates {
-                    Text("日历课程保留 \(dates.count) 次具体日期，可调整时间；日期变更请重新导入。")
-                        .font(.caption).foregroundStyle(.secondary).padding(.bottom, 10)
-                } else if let weeks = draft.activeWeeks {
-                    Text("精确周次：\(weeks.sorted().map(String.init).joined(separator: "、"))；修改周数后改为连续范围。")
-                        .font(.caption).foregroundStyle(.secondary).padding(.bottom, 10)
+        KebiaoCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(timetable.name).font(.caption).foregroundStyle(.secondary)
+                TextField("输入课程名称", text: $draft.name).font(.title2.weight(.semibold))
+                Divider()
+                HStack {
+                    Label("颜色", systemImage: "paintpalette"); Spacer()
+                    ColorPicker("颜色", selection: colorBinding, supportsOpacity: false).labelsHidden()
                 }
                 Divider()
+                HStack {
+                    Label("学分", systemImage: "star.circle"); Spacer()
+                    TextField("选填", text: creditsBinding).multilineTextAlignment(.trailing)
+                        .keyboardType(.decimalPad).frame(width: 90)
+                }
+                Divider()
+                TextField("备注（所有时段共用）", text: notesBinding, axis: .vertical).lineLimit(2...5)
+            }
+        }
+    }
 
-                VStack(alignment: .leading, spacing: 13) {
-                    Label("上课日", systemImage: "calendar.day.timeline.left")
-                        .font(.body)
-                    HStack(spacing: 6) {
-                        ForEach(Weekday.allCases) { day in
-                            Button {
-                                if draft.weekdays.contains(day), draft.weekdays.count > 1 {
-                                    draft.weekdays.remove(day)
-                                } else {
-                                    draft.weekdays.insert(day)
-                                }
-                            } label: {
-                                Text(day.shortName.replacingOccurrences(of: "周", with: ""))
-                                    .font(.caption.weight(.semibold))
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 34)
-                                    .foregroundStyle(draft.weekdays.contains(day) ? .white : .secondary)
-                                    .background(draft.weekdays.contains(day) ? KebiaoTheme.accent : KebiaoTheme.background, in: Circle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(day.fullName)
-                            .accessibilityAddTraits(draft.weekdays.contains(day) ? .isSelected : [])
+    private var adjustmentHistory: some View {
+        KebiaoCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("临时调整记录").font(.headline)
+                Text("恢复后需点击保存；取消编辑会保留原来的停课或调课。")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(draft.exceptions) { exception in
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(exception.action == .cancelled ? "已停课" : "已调课").font(.subheadline.weight(.semibold))
+                            Text(exceptionDescription(exception)).font(.caption).foregroundStyle(.secondary)
                         }
+                        Spacer()
+                        Button("恢复原安排") { draft.exceptions.removeAll { $0.id == exception.id } }
+                            .font(.caption).buttonStyle(.bordered)
                     }
                 }
-                .padding(.vertical, 16)
-                .disabled(draft.scheduledDates != nil)
-                Divider()
-
-                editorRow(icon: "clock", title: "节数") {
-                    HStack(spacing: 5) {
-                        Text("从")
-                        counterControl(value: $draft.startSection, range: 1...12, label: "开始节次")
-                        Text("起")
-                        counterControl(value: $draft.sectionCount, range: 1...min(4, 13 - draft.startSection), label: "连续节数")
-                        Text("节")
-                    }
-                    .font(.subheadline)
-                }
-                .onChange(of: draft.sectionCount) { _, _ in draft.durationMinutes = nil }
-                .onChange(of: draft.startSection) { _, _ in
-                    draft.sectionCount = min(draft.sectionCount, 13 - draft.startSection)
-                    draft.durationMinutes = nil
-                }
-                Divider()
-
-                editorRow(icon: "pencil.and.outline", title: "自定义时间") {
-                    Toggle("自定义时间", isOn: customTimeEnabled).labelsHidden().disabled(draft.scheduledDates != nil)
-                }
-                if draft.startTimeMinutes != nil {
-                    DatePicker("开始时间", selection: startTime, displayedComponents: .hourAndMinute)
-                        .padding(.bottom, 14)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-                Divider()
-
-                fieldRow(icon: "mappin.and.ellipse", title: "教室", text: $draft.location)
-                Divider()
-                fieldRow(icon: "person", title: "老师", text: $draft.teacher)
-                Divider()
-                fieldRow(icon: "note.text", title: "备注", text: notesBinding)
             }
-            .padding(.horizontal, 18)
-            .background(.white, in: RoundedRectangle(cornerRadius: KebiaoTheme.cardRadius, style: .continuous))
         }
     }
 
-    private var reminderCard: some View {
-        VStack(spacing: 0) {
-            editorRow(icon: "bell", title: "上课前提醒") {
-                Toggle("提醒", isOn: reminderEnabled).labelsHidden()
-            }
-            if draft.reminderMinutesBefore != nil {
-                Divider()
-                editorRow(icon: "timer", title: "提前时间") {
-                    Stepper("\(draft.reminderMinutesBefore ?? 10) 分钟", value: reminderLeadTime, in: 1...120)
-                        .font(.subheadline)
-                }
-            }
+    private func exceptionDescription(_ exception: CourseException) -> String {
+        let formatter = DateFormatter()
+        formatter.timeZone = timetable.calendar.timeZone
+        formatter.dateFormat = "yyyy/M/d HH:mm"
+        let original: String
+        switch exception.source {
+        case .weekly(let day): original = day
+        case .dated(let eventID):
+            original = draft.timeSlots.flatMap { $0.datedEvents ?? [] }.first { $0.id == eventID }
+                .map { formatter.string(from: $0.startDate) } ?? "具体日期课程"
         }
-        .padding(.horizontal, 18)
-        .background(.white, in: RoundedRectangle(cornerRadius: KebiaoTheme.cardRadius, style: .continuous))
+        if let date = exception.startDate, exception.action == .replaced {
+            return "原安排：" + original + " → " + formatter.string(from: date)
+        }
+        return "原安排：" + original
     }
-
     private var managementButtons: some View {
         HStack(spacing: 12) {
-            Button {
-                store.duplicate(draft)
-                dismiss()
-            } label: {
-                Label("复制课程", systemImage: "doc.on.doc")
-                    .frame(maxWidth: .infinity)
+            Button { if store.duplicate(draft, into: timetable.id) { dismiss() } else { saveError = store.errorMessage } } label: {
+                Label("复制课程", systemImage: "doc.on.doc").frame(maxWidth: .infinity)
+            }.buttonStyle(.bordered)
+            Button(role: .destructive) { showingDeleteConfirmation = true } label: {
+                Label("删除", systemImage: "trash").frame(maxWidth: .infinity)
+            }.buttonStyle(.bordered)
+        }.buttonBorderShape(.roundedRectangle(radius: 14))
+    }
+
+    private func slotBinding(id: UUID) -> Binding<CourseTimeSlot> {
+        Binding(get: { draft.timeSlots.first { $0.id == id } ?? draft.timeSlots[0] }, set: { value in
+            if let index = draft.timeSlots.firstIndex(where: { $0.id == id }) {
+                draft.timeSlots[index] = value
+                draft.exceptions.removeAll { exception in
+                    guard exception.slotID == id else { return false }
+                    switch exception.source {
+                    case .weekly: return value.datedEvents != nil
+                    case .dated(let eventID): return value.datedEvents?.contains { $0.id == eventID } != true
+                    }
+                }
             }
-            .buttonStyle(.bordered)
-            Button(role: .destructive) {
-                showingDeleteConfirmation = true
-            } label: {
-                Label("删除", systemImage: "trash")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-        }
-        .buttonBorderShape(.roundedRectangle(radius: 14))
+        })
     }
 
-    private func editorRow<Accessory: View>(icon: String, title: String, @ViewBuilder accessory: () -> Accessory) -> some View {
-        HStack(spacing: 13) {
-            Image(systemName: icon).frame(width: 23).foregroundStyle(.primary)
-            Text(title).fixedSize(horizontal: true, vertical: false)
-            Spacer()
-            accessory()
-        }
-        .frame(minHeight: 56)
-    }
-
-    private func fieldRow(icon: String, title: String, text: Binding<String>) -> some View {
-        editorRow(icon: icon, title: title) {
-            TextField("选填", text: text)
-                .multilineTextAlignment(.trailing)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func counterControl(value: Binding<Int>, range: ClosedRange<Int>, label: String) -> some View {
-        HStack(spacing: 0) {
-            Button {
-                value.wrappedValue = max(range.lowerBound, value.wrappedValue - 1)
-            } label: {
-                Image(systemName: "minus").frame(width: 28, height: 32)
-            }
-            .disabled(value.wrappedValue <= range.lowerBound)
-            Text("\(value.wrappedValue)")
-                .monospacedDigit()
-                .frame(minWidth: 22)
-            Button {
-                value.wrappedValue = min(range.upperBound, value.wrappedValue + 1)
-            } label: {
-                Image(systemName: "plus").frame(width: 28, height: 32)
-            }
-            .disabled(value.wrappedValue >= range.upperBound)
-        }
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.primary)
-        .background(KebiaoTheme.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label)，\(value.wrappedValue)")
-    }
-
-    private var startWeekBinding: Binding<Int> {
-        Binding(
-            get: { draft.resolvedStartWeek },
-            set: { draft.startWeek = $0; draft.endWeek = max($0, draft.resolvedEndWeek); draft.activeWeeks = nil }
-        )
-    }
-
-    private var endWeekBinding: Binding<Int> {
-        Binding(get: { draft.resolvedEndWeek }, set: { draft.endWeek = $0; draft.activeWeeks = nil })
+    private func duplicateSlot(_ slot: CourseTimeSlot) {
+        var copy = slot
+        copy.id = UUID()
+        copy.datedEvents = slot.datedEvents?.map { event in var copy = event; copy.id = UUID(); return copy }
+        draft.timeSlots.append(copy)
     }
 
     private var creditsBinding: Binding<String> {
-        Binding(
-            get: { draft.credits.map { $0.formatted(.number.precision(.fractionLength(0...2))) } ?? "" },
-            set: { draft.credits = Double($0.replacingOccurrences(of: ",", with: ".")) }
-        )
+        Binding(get: { draft.credits.map { $0.formatted(.number.precision(.fractionLength(0...2))) } ?? "" },
+            set: { draft.credits = Double($0.replacingOccurrences(of: ",", with: ".")) })
     }
-
     private var notesBinding: Binding<String> {
         Binding(get: { draft.notes ?? "" }, set: { draft.notes = $0.isEmpty ? nil : $0 })
     }
-
     private var colorBinding: Binding<Color> {
-        Binding(
-            get: { draft.color },
-            set: { draft.colorValue = $0.hexValue ?? draft.colorValue }
-        )
-    }
-
-    private var customTimeEnabled: Binding<Bool> {
-        Binding(
-            get: { draft.startTimeMinutes != nil },
-            set: { enabled in
-                withAnimation(.snappy) {
-                    draft.startTimeMinutes = enabled ? draft.resolvedStartTimeMinutes : nil
-                }
-            }
-        )
-    }
-
-    private var startTime: Binding<Date> {
-        Binding {
-            Calendar.current.date(byAdding: .minute, value: draft.resolvedStartTimeMinutes, to: Calendar.current.startOfDay(for: .now)) ?? .now
-        } set: { date in
-            let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
-            draft.startTimeMinutes = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
-            if let dates = draft.scheduledDates {
-                draft.scheduledDates = Set(dates.compactMap {
-                    Calendar.current.date(bySettingHour: parts.hour ?? 0, minute: parts.minute ?? 0, second: 0, of: $0)
-                })
-            }
-        }
-    }
-
-    private var reminderEnabled: Binding<Bool> {
-        Binding(
-            get: { draft.reminderMinutesBefore != nil },
-            set: { draft.reminderMinutesBefore = $0 ? (draft.reminderMinutesBefore ?? 10) : nil }
-        )
-    }
-
-    private var reminderLeadTime: Binding<Int> {
-        Binding(get: { draft.reminderMinutesBefore ?? 10 }, set: { draft.reminderMinutesBefore = $0 })
+        Binding(get: { draft.color }, set: { draft.colorValue = $0.courseHexValue ?? draft.colorValue })
     }
 }
 
 private enum CourseSheet: Identifiable {
-    case create
-    case edit(Course)
-    case importSchedule
-
+    case create, edit(Course), importSchedule
     var id: String {
         switch self {
         case .create: "create"
@@ -440,7 +248,7 @@ private enum CourseSheet: Identifiable {
 }
 
 private extension Color {
-    var hexValue: Int? {
+    var courseHexValue: Int? {
         guard let components = UIColor(self).cgColor.components else { return nil }
         let values = components.count == 2 ? [components[0], components[0], components[0]] : components
         guard values.count >= 3 else { return nil }

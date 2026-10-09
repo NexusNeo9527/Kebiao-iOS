@@ -24,6 +24,15 @@ struct LiveActivityPlan {
 
     static func make(courses: [Course], at now: Date, calendar: Calendar = .current) -> Self {
         let next = ScheduleEngine.currentOrUpcomingOccurrence(in: courses, at: now, calendar: calendar)
+        return make(next: next, at: now, calendar: calendar)
+    }
+
+    static func make(timetable: Timetable, at now: Date) -> Self {
+        make(next: ScheduleEngine.currentOrUpcomingOccurrence(in: timetable, at: now),
+             at: now, calendar: timetable.calendar)
+    }
+
+    private static func make(next: CourseOccurrence?, at now: Date, calendar: Calendar) -> Self {
         let display = next.flatMap { occurrence -> CourseOccurrence? in
             if occurrence.startDate <= now { return occurrence }
             guard calendar.isDate(occurrence.startDate, inSameDayAs: now),
@@ -99,7 +108,8 @@ struct LiveActivityClient {
         let course = occurrence.course
         return ClassActivityAttributes(courseID: course.id, courseName: course.name, teacher: course.teacher,
             location: course.location, startSection: course.startSection, endSection: course.endSection,
-            startDate: occurrence.startDate, endDate: occurrence.endDate)
+            startDate: occurrence.startDate, endDate: occurrence.endDate, occurrenceID: occurrence.id,
+            timeZoneIdentifier: occurrence.timeZoneIdentifier)
     }
 }
 
@@ -110,11 +120,30 @@ final class LiveActivityController {
     private var generation = 0
     private var previewUntil: Date?
     private var previewActivityID: String?
+    private var activeTimetableID: UUID?
     private(set) var status = LiveActivityStatus(phase: .idle, message: "打开 App 后会显示当天 6 小时内的当前或下一门课。")
 
     init(client: LiveActivityClient) { self.client = client }
 
     func refresh(courses: [Course], enabled: Bool, at now: Date = .now, calendar: Calendar = .current) async {
+        await refresh(plan: LiveActivityPlan.make(courses: courses, at: now, calendar: calendar),
+            hasCourses: !courses.isEmpty, enabled: enabled, at: now, calendar: calendar, timetableID: nil)
+    }
+
+    func refresh(timetable: Timetable, enabled: Bool, at now: Date = .now) async {
+        await refresh(plan: LiveActivityPlan.make(timetable: timetable, at: now),
+            hasCourses: !timetable.courses.isEmpty, enabled: enabled, at: now,
+            calendar: timetable.calendar, timetableID: timetable.id)
+    }
+
+    private func refresh(plan: LiveActivityPlan, hasCourses: Bool, enabled: Bool, at now: Date,
+                         calendar: Calendar, timetableID: UUID?) async {
+        let changedTimetable = activeTimetableID != timetableID
+        if changedTimetable {
+            activeTimetableID = timetableID
+            previewUntil = nil
+            previewActivityID = nil
+        }
         if let previewUntil, now < previewUntil {
             // Reserve the preview before the first suspension. A periodic refresh
             // must not cancel a preview while old activities are being ended.
@@ -130,6 +159,10 @@ final class LiveActivityController {
         previewActivityID = nil
         generation += 1
         let revision = generation
+        if changedTimetable {
+            await clearActivities()
+            guard revision == generation else { return }
+        }
         guard enabled else {
             await clearActivities()
             guard revision == generation else { return }
@@ -142,7 +175,6 @@ final class LiveActivityController {
             status = LiveActivityStatus(phase: .systemDenied, message: "系统未允许实时活动，请在系统设置中为“课表”开启。")
             return
         }
-        let plan = LiveActivityPlan.make(courses: courses, at: now, calendar: calendar)
         guard let occurrence = plan.occurrenceToDisplay else {
             if let next = plan.nextOccurrence, let schedule = client.schedule {
                 let start = LiveActivityPlan.scheduledStart(for: next, calendar: calendar)
@@ -150,7 +182,7 @@ final class LiveActivityController {
                     if let existing = client.activities().first(where: {
                         Self.isScheduled($0.state) && LiveActivityCoordinator.matches($0.attributes, occurrence: next)
                     }) {
-                        status = Self.scheduledStatus(existing, start: start)
+                        status = Self.scheduledStatus(existing, start: start, calendar: calendar)
                         return
                     }
                     await clearActivities()
@@ -160,7 +192,7 @@ final class LiveActivityController {
                         guard Self.isScheduled(handle.state) else {
                             throw LiveActivityError.notActive(String(describing: handle.state))
                         }
-                        status = Self.scheduledStatus(handle, start: start)
+                        status = Self.scheduledStatus(handle, start: start, calendar: calendar)
                     } catch {
                         status = LiveActivityStatus(phase: .failed, message: "实时活动计划启动失败：\(error.localizedDescription)。当天课前 6 小时内打开 App 可立即显示。")
                     }
@@ -170,10 +202,10 @@ final class LiveActivityController {
             await clearActivities()
             guard revision == generation else { return }
             if let next = plan.nextOccurrence {
-                let start = next.startDate.formatted(date: .abbreviated, time: .shortened)
+                let start = Self.startDescription(next.startDate, calendar: calendar)
                 status = LiveActivityStatus(phase: .waiting, message: "下一门课：\(next.course.name)，\(start)。当天课前 6 小时内打开 App 后会显示。")
             } else {
-                status = LiveActivityStatus(phase: .idle, message: courses.isEmpty ? "还没有课程，导入课表后即可显示实时活动。" : "课程已结束，目前没有即将开始的课程。")
+                status = LiveActivityStatus(phase: .idle, message: !hasCourses ? "还没有课程，导入课表后即可显示实时活动。" : "课程已结束，目前没有即将开始的课程。")
             }
             return
         }
@@ -198,21 +230,37 @@ final class LiveActivityController {
     }
 
     func preview(course: Course, at now: Date = .now) async throws {
+        let start = now.addingTimeInterval(5 * 60)
+        let occurrence = CourseOccurrence(course: course, startDate: start, endDate: start.addingTimeInterval(50 * 60))
+        try await startPreview(occurrence: occurrence, timetableID: nil)
+    }
+
+    func preview(timetable: Timetable, at now: Date = .now) async throws {
+        let next = ScheduleEngine.currentOrUpcomingOccurrence(in: timetable, at: now)
+        guard let course = next?.course ?? timetable.courses.first else { throw LiveActivityError.noCourses }
+        let start = now.addingTimeInterval(5 * 60)
+        let occurrence = CourseOccurrence(course: course, startDate: start, endDate: start.addingTimeInterval(50 * 60),
+            timetableID: timetable.id, slotID: next?.slotID,
+            source: next?.source ?? .weekly(ScheduleEngine.localDateKey(start, calendar: timetable.calendar)),
+            timeZoneIdentifier: timetable.timeZoneIdentifier)
+        try await startPreview(occurrence: occurrence, timetableID: timetable.id)
+    }
+
+    private func startPreview(occurrence: CourseOccurrence, timetableID: UUID?) async throws {
         generation += 1
         let revision = generation
+        activeTimetableID = timetableID
         guard client.authorized() else {
             status = LiveActivityStatus(phase: .systemDenied, message: LiveActivityError.disabled.localizedDescription)
             throw LiveActivityError.disabled
         }
-        let start = now.addingTimeInterval(5 * 60)
-        let end = start.addingTimeInterval(50 * 60)
-        previewUntil = end
+        previewUntil = occurrence.endDate
         previewActivityID = nil
         status = LiveActivityStatus(phase: .starting, message: "正在创建灵动岛预览…")
         await clearActivities()
         guard revision == generation else { throw LiveActivityError.superseded }
         do {
-            let handle = try client.request(CourseOccurrence(course: course, startDate: start, endDate: end))
+            let handle = try client.request(occurrence)
             guard handle.state == .active else {
                 throw LiveActivityError.notActive(String(describing: handle.state))
             }
@@ -254,10 +302,19 @@ final class LiveActivityController {
         for handle in snapshot { await client.end(handle) }
     }
 
-    private static func scheduledStatus(_ handle: LiveActivityHandle, start: Date) -> LiveActivityStatus {
+    private static func scheduledStatus(_ handle: LiveActivityHandle, start: Date, calendar: Calendar) -> LiveActivityStatus {
         LiveActivityStatus(phase: .scheduled,
-            message: "已计划灵动岛：\(handle.attributes.courseName)，将于 \(start.formatted(date: .abbreviated, time: .shortened)) 自动开始。",
+            message: "已计划灵动岛：\(handle.attributes.courseName)，将于 \(startDescription(start, calendar: calendar)) 自动开始。",
             activityID: handle.id, activityState: String(describing: handle.state))
+    }
+
+    private static func startDescription(_ date: Date, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 
     private static func activeStatus(_ handle: LiveActivityHandle, preview: Bool) -> LiveActivityStatus {
@@ -276,12 +333,22 @@ enum LiveActivityCoordinator {
         await controller.refresh(courses: courses, enabled: LiveActivityPreferences.isEnabled(), at: now)
     }
 
+    static func refresh(timetable: Timetable, at now: Date = .now) async {
+        await controller.refresh(timetable: timetable, enabled: LiveActivityPreferences.isEnabled(), at: now)
+    }
+
     static func preview(course: Course) async throws { try await controller.preview(course: course) }
+    static func preview(timetable: Timetable) async throws { try await controller.preview(timetable: timetable) }
     static func endAll() async { await controller.endAll() }
 
     static func matches(_ attributes: ClassActivityAttributes, occurrence: CourseOccurrence) -> Bool {
         let course = occurrence.course
-        return attributes.courseID == course.id && attributes.startDate == occurrence.startDate
+        let identityMatches = attributes.occurrenceID.map { $0 == occurrence.id }
+            ?? (occurrence.timetableID == ScheduleEngine.legacyTimetableID)
+        let timeZoneMatches = attributes.timeZoneIdentifier == occurrence.timeZoneIdentifier
+            || (attributes.timeZoneIdentifier == nil && occurrence.timetableID == ScheduleEngine.legacyTimetableID)
+        return identityMatches && timeZoneMatches
+            && attributes.courseID == course.id && attributes.startDate == occurrence.startDate
             && attributes.endDate == occurrence.endDate && attributes.courseName == course.name
             && attributes.teacher == course.teacher && attributes.location == course.location
             && attributes.startSection == course.startSection && attributes.endSection == course.endSection
@@ -289,12 +356,13 @@ enum LiveActivityCoordinator {
 }
 
 enum LiveActivityError: LocalizedError {
-    case disabled, superseded, notActive(String)
+    case disabled, superseded, noCourses, notActive(String)
 
     var errorDescription: String? {
         switch self {
         case .disabled: "请先在系统设置中允许“实时活动”。"
         case .superseded: "预览被新的操作中断，请再次点击预览。"
+        case .noCourses: "当前课表还没有课程，请先添加或导入课程。"
         case .notActive(let state): "系统返回的活动未激活（\(state)），请检查系统实时活动权限并重试。"
         }
     }

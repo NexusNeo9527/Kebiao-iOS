@@ -39,6 +39,7 @@ struct KebiaoClassLiveActivity: Widget {
                 .foregroundStyle(.secondary)
             }
             .padding()
+            .environment(\.timeZone, timeZone(for: context.attributes))
             .activityBackgroundTint(Color.indigo.opacity(0.12))
             .activitySystemActionForegroundColor(.indigo)
             .widgetURL(KebiaoConfiguration.scheduleURL)
@@ -79,6 +80,7 @@ struct KebiaoClassLiveActivity: Widget {
                         }
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.7))
+                        .environment(\.timeZone, timeZone(for: context.attributes))
                     }
                     .font(.caption)
                     .foregroundStyle(.white)
@@ -111,5 +113,9 @@ struct KebiaoClassLiveActivity: Widget {
 
     private func location(for attributes: ClassActivityAttributes) -> String {
         attributes.location.isEmpty ? "教室待定" : attributes.location
+    }
+
+    private func timeZone(for attributes: ClassActivityAttributes) -> TimeZone {
+        attributes.timeZoneIdentifier.flatMap(TimeZone.init(identifier:)) ?? .current
     }
 }
