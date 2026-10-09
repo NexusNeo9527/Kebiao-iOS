@@ -67,7 +67,7 @@ struct TodayProvider: TimelineProvider {
     private func entry(for date: Date, timetable: Timetable?) -> TodayEntry {
         TodayEntry(date: date, timetableName: timetable?.name ?? "今日课表",
             timeZoneIdentifier: timetable?.timeZoneIdentifier ?? TimeZone.current.identifier,
-            occurrences: timetable.map { ScheduleEngine.occurrences(in: $0, on: date) } ?? [])
+            occurrences: timetable.map { ScheduleEngine.occurrencesOverlappingDay(in: $0, on: date) } ?? [])
     }
 }
 

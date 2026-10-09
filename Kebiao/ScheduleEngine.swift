@@ -74,6 +74,14 @@ enum ScheduleEngine {
         return occurrences(in: timetable, from: start, to: end)
     }
 
+    static func occurrencesOverlappingDay(in timetable: Timetable, on date: Date) -> [CourseOccurrence] {
+        let start = timetable.calendar.startOfDay(for: date)
+        let end = timetable.calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+        // Validated courses can last up to 24 hours, including dated and moved arrangements.
+        return occurrences(in: timetable, from: start.addingTimeInterval(-86_400), to: end)
+            .filter { $0.endDate > start }
+    }
+
     // The interval includes starts at from and excludes starts at to.
     static func occurrences(in timetable: Timetable, from: Date, to: Date) -> [CourseOccurrence] {
         guard to > from else { return [] }

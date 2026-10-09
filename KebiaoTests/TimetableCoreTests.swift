@@ -138,6 +138,55 @@ final class TimetableCoreTests: XCTestCase {
         XCTAssertEqual(ScheduleEngine.reminders(in: timetable, after: date(15, 23)).first?.fireDate, date(15, 23, 55))
     }
 
+    func testOverlappingDayKeepsDatedEventsAndStableIDsUsingTimetableTimeZone() throws {
+        // The queried day is September 15 in Shanghai, although the UTC date is September 14.
+        let fullDay = DatedCourseEvent(startDate: date(14, 0, 1), endDate: date(15, 0, 1))
+        let overnight = DatedCourseEvent(startDate: date(14, 15), endDate: date(14, 17))
+        let endsAtMidnight = DatedCourseEvent(startDate: date(14, 14), endDate: date(14, 16))
+        let first = DatedCourseEvent(startDate: date(15, 1), endDate: date(15, 2))
+        let second = DatedCourseEvent(startDate: date(15, 10), endDate: date(15, 11))
+        let nextDay = DatedCourseEvent(startDate: date(15, 16), endDate: date(15, 17))
+        let slot = CourseTimeSlot(datedEvents: [fullDay, overnight, endsAtMidnight, first, second, nextDay])
+        let timetable = Timetable(semesterStartDate: date(13, 16), timeZoneIdentifier: "Asia/Shanghai",
+                                  courses: [course([slot])])
+        try timetable.validate()
+        let query = date(14, 20)
+        let overlapping = ScheduleEngine.occurrencesOverlappingDay(in: timetable, on: query)
+        XCTAssertEqual(overlapping.map(\.source), [.dated(fullDay.id), .dated(overnight.id), .dated(first.id), .dated(second.id)])
+        XCTAssertEqual(Set(overlapping.map(\.id)).count, 4)
+        let previousDay = ScheduleEngine.occurrences(in: timetable, on: date(14, 7))
+        for event in [fullDay, overnight] {
+            XCTAssertEqual(overlapping.first { $0.source == .dated(event.id) }?.id,
+                           previousDay.first { $0.source == .dated(event.id) }?.id)
+        }
+        // Date-range exports and ordinary day queries continue to select starts on that day.
+        XCTAssertEqual(ScheduleEngine.occurrences(in: timetable, on: query).map(\.source), [.dated(first.id), .dated(second.id)])
+    }
+
+    func testOverlappingDayIncludesOvernightWeeklyAndMovedCoursesOnce() throws {
+        let weekly = CourseTimeSlot(weekdays: [.monday], startTimeMinutes: 23 * 60,
+                                    activeWeeks: [1], durationMinutes: 120)
+        let movedSlot = CourseTimeSlot(weekdays: [.monday], activeWeeks: [1])
+        var value = course([weekly, movedSlot])
+        value.exceptions = [CourseException(slotID: movedSlot.id, source: .weekly("2026-09-14"), action: .replaced,
+            startDate: date(16, 23), endDate: date(17, 1), location: "补课教室")]
+        let timetable = table(value)
+        try timetable.validate()
+        let monday = try XCTUnwrap(ScheduleEngine.occurrences(in: timetable, on: date(14)).first)
+        let tuesday = ScheduleEngine.occurrencesOverlappingDay(in: timetable, on: date(15, 0, 30))
+        XCTAssertEqual(tuesday.count, 1)
+        XCTAssertEqual(tuesday.first?.id, monday.id)
+        XCTAssertEqual(tuesday.first?.endDate, date(15, 1))
+        XCTAssertTrue(ScheduleEngine.occurrences(in: timetable, on: date(15)).isEmpty)
+        let wednesday = try XCTUnwrap(ScheduleEngine.occurrences(in: timetable, on: date(16)).first)
+        let thursday = ScheduleEngine.occurrencesOverlappingDay(in: timetable, on: date(17, 0, 30))
+        XCTAssertEqual(thursday.count, 1)
+        XCTAssertEqual(thursday.first?.id, wednesday.id)
+        XCTAssertEqual(thursday.first?.source, .weekly("2026-09-14"))
+        XCTAssertEqual(thursday.first?.location, "补课教室")
+        XCTAssertTrue(ScheduleEngine.occurrences(in: timetable, on: date(17)).isEmpty)
+    }
+
     func testValidationRejectsBrokenReferencesUnsupportedVersionAndInvalidPeriods() {
         let slot = CourseTimeSlot()
         var value = course([slot])
