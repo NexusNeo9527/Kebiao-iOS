@@ -51,7 +51,7 @@ struct ScheduleView: View {
         VStack(spacing: 0) {
             header
             GeometryReader { geometry in
-                let dayWidth = max(96, (geometry.size.width - timeColumnWidth) / 7)
+                let dayWidth: CGFloat = max(96, (geometry.size.width - timeColumnWidth) / 7)
                 ScrollViewReader { horizontalProxy in
                     ScrollView(.horizontal, showsIndicators: true) {
                         VStack(spacing: 0) {
@@ -183,14 +183,11 @@ struct ScheduleView: View {
     }
     private func courseBlocks(dayWidth: CGFloat) -> some View {
         ForEach(Weekday.allCases) { day in
-            ForEach(OccurrenceGroup.groups(occurrences(on: day), row: rowPosition)) { group in
-                Button { presentedSheet = .group(group) } label: {
-                    OccurrenceBlock(group: group, calendar: calendar)
-                }.buttonStyle(.plain)
-                    .frame(width: dayWidth - 6, height: max(32, (group.endRow - group.startRow) * sectionHeight - 6))
-                    .offset(x: timeColumnWidth + CGFloat(day.weekIndex) * dayWidth + 3, y: group.startRow * sectionHeight + 3)
-                    .accessibilityLabel(group.occurrences.map { $0.course.name }.joined(separator: "、"))
-                    .accessibilityHint(group.occurrences.count > 1 ? "轻点查看全部重叠安排" : "轻点查看课程详情")
+            let groups: [OccurrenceGroup] = OccurrenceGroup.groups(occurrences(on: day), row: rowPosition)
+            ForEach(groups) { group in
+                PositionedOccurrenceButton(group: group, calendar: calendar, dayIndex: day.weekIndex,
+                    dayWidth: dayWidth, timeColumnWidth: timeColumnWidth, sectionHeight: sectionHeight,
+                    onSelect: { presentedSheet = .group(group) })
             }
         }
     }
@@ -222,6 +219,36 @@ struct ScheduleView: View {
         withAnimation(.snappy) { weekAnchor = calendar.date(byAdding: .weekOfYear, value: value, to: weekAnchor) ?? weekAnchor }
     }
     private var weekPageID: Date { Weekday.monday.date(inWeekContaining: weekAnchor, calendar: calendar) }
+}
+
+private struct PositionedOccurrenceButton: View {
+    let group: OccurrenceGroup
+    let calendar: Calendar
+    let dayIndex: Int
+    let dayWidth: CGFloat
+    let timeColumnWidth: CGFloat
+    let sectionHeight: CGFloat
+    let onSelect: () -> Void
+
+    private var blockWidth: CGFloat { dayWidth - 6 }
+    private var blockHeight: CGFloat { max(32, (group.endRow - group.startRow) * sectionHeight - 6) }
+    private var horizontalOffset: CGFloat { timeColumnWidth + CGFloat(dayIndex) * dayWidth + 3 }
+    private var verticalOffset: CGFloat { group.startRow * sectionHeight + 3 }
+    private var accessibilityLabel: String { group.occurrences.map { $0.course.name }.joined(separator: "、") }
+    private var accessibilityHint: String {
+        group.occurrences.count > 1 ? "轻点查看全部重叠安排" : "轻点查看课程详情"
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            OccurrenceBlock(group: group, calendar: calendar)
+        }
+        .buttonStyle(.plain)
+        .frame(width: blockWidth, height: blockHeight)
+        .offset(x: horizontalOffset, y: verticalOffset)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(accessibilityHint)
+    }
 }
 
 private struct OccurrenceGroup: Identifiable {

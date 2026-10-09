@@ -179,7 +179,6 @@ jobs:
 
   release-build:
     name: Archive Release with latest stable Xcode
-    needs: build
     runs-on: macos-latest
     timeout-minutes: 30
     permissions:
