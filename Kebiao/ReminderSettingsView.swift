@@ -133,10 +133,11 @@ struct ReminderSettingsView: View {
                 LabeledContent("声音", value: diagnostics.settings.sound.description)
                 LabeledContent("当前课表已排程", value: "\(diagnostics.scheduledCount) 条")
                     .accessibilityIdentifier("reminder-pending-count")
-                LabeledContent("下一次提醒", value: nextReminderDescription(diagnostics.nextReminderDate))
+                LabeledContent("下一次提醒", value: nextReminderDescription(diagnostics.nextReminderDate,
+                    scheduledCount: diagnostics.scheduledCount))
                     .accessibilityIdentifier("reminder-next-date")
                 if diagnostics.otherTimetableCount > 0 {
-                    Text("发现 \(diagnostics.otherTimetableCount) 条其他课表或旧格式提醒，重新排程可清理。")
+                    Text("发现 \(diagnostics.otherTimetableCount) 条其他课表或旧格式提醒。关闭通知可清理；权限允许时重新排程也会清理。")
                         .font(.footnote).foregroundStyle(.orange)
                         .accessibilityIdentifier("reminder-other-count")
                 }
@@ -166,8 +167,8 @@ struct ReminderSettingsView: View {
         .accessibilityIdentifier("reminder-diagnostics")
     }
 
-    private func nextReminderDescription(_ date: Date?) -> String {
-        guard let date else { return "暂无待投递提醒" }
+    private func nextReminderDescription(_ date: Date?, scheduledCount: Int) -> String {
+        guard let date else { return scheduledCount == 0 ? "暂无待投递提醒" : "下一次触发时间不可用" }
         let formatter = DateFormatter()
         formatter.calendar = store.activeTimetable.calendar
         formatter.timeZone = store.activeTimetable.calendar.timeZone
