@@ -258,6 +258,35 @@ final class ReminderDiagnosticsTests: XCTestCase {
         XCTAssertEqual(value?.appEnabled, true)
         XCTAssertEqual(value?.scheduledCount, 2)
     }
+
+    func testRescheduleWhileDisabledCannotSupersedeRequiredCleanup() async throws {
+        let (defaults, suite) = try defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let table = timetable()
+        try store(table, in: defaults)
+        let fake = ReminderNotificationFake()
+        await fake.setPending([PendingReminderNotification(identifier: "other-feature", nextTriggerDate: date(12))])
+        let schedulesBegan = expectation(description: "Both scheduling operations began")
+        schedulesBegan.expectedFulfillmentCount = 2
+        let now = date(8)
+        let scheduler = ReminderScheduler(client: fake.client, preferenceDefaults: defaults,
+            timetableDefaults: defaults, now: { schedulesBegan.fulfill(); return now })
+        await scheduler.reschedule(timetable: table)
+        let gate = ReminderAsyncGate()
+        let cleanupBegan = expectation(description: "Disable pending lookup suspended")
+        await fake.pauseNextPending(gate, began: cleanupBegan)
+        let disableTask = Task { await scheduler.disable() }
+        await fulfillment(of: [cleanupBegan], timeout: 2)
+        XCTAssertFalse(defaults.bool(forKey: ReminderPreferences.enabledKey))
+        let refreshTask = Task { await scheduler.reschedule(timetable: table) }
+        await fulfillment(of: [schedulesBegan], timeout: 2)
+        await gate.open()
+        await disableTask.value
+        await refreshTask.value
+        let pending = await fake.pendingValues
+        XCTAssertEqual(pending.map(\.identifier), ["other-feature"])
+        XCTAssertFalse(defaults.bool(forKey: ReminderPreferences.enabledKey))
+    }
 }
 
 private actor ReminderAsyncGate {

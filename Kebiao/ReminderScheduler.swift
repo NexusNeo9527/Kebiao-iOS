@@ -71,14 +71,15 @@ actor ReminderScheduler {
     func disable() async {
         authorizationGeneration += 1
         generation += 1
-        let revision = generation
         preferences.set(false, forKey: ReminderPreferences.enabledKey)
         let previous = queue
         // Cleanup participates in the same queue as additions. A suspended removal
         // cannot resume after a newer schedule has added requests with the same IDs.
         let task = Task {
             await previous?.value
-            await self.removeCourseRequests(revision: revision)
+            // New schedules wait for this queued cleanup, so their generation
+            // changes must not cancel it (including refreshes while disabled).
+            await self.removeCourseRequests()
         }
         queue = task
         await task.value

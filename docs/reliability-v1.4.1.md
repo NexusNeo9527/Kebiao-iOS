@@ -16,7 +16,7 @@ App 与 Widget：1.4.1 / 17。独立补丁基于 `43ac55b`，草稿 PR 目标为
 
 ## 自动验收记录
 
-实施中的本地检查及最终 macOS CI、三种设备界面、共享内容宿主截图、归档和 IPA 校验结果将在交付时补齐。保留现有全部 XCTest、教务导入、学校登录及 Live Activity 回归。
+最终 macOS CI、三种设备界面、共享内容宿主截图、归档及 IPA 校验记录统一保存在[独立草稿 PR #6](https://github.com/NexusNeo9527/Kebiao-iOS/pull/6)，并注明对应提交和产物校验值。CI 保留现有全部 XCTest、教务导入、学校登录及 Live Activity 回归，同时运行导入、提醒和共享读取测试；新增界面覆盖 iPhone 16 Pro、iPhone SE（第三代）及 iPad Air 11 英寸。
 
 共享内容测试宿主仅编译到模拟器，使用 App 与 Widget 共用的实际组件展示小、中尺寸状态。截图验证布局和状态文案，刷新请求仅表示已向 WidgetKit 请求刷新。
 

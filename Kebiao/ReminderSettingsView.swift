@@ -106,11 +106,16 @@ struct ReminderSettingsView: View {
         .task(id: store.activeTimetable) {
             diagnostics = nil
             statusMessage = nil
-            await refreshDiagnostics()
-            await LiveActivityCoordinator.refresh(timetable: store.activeTimetable)
+            let timetable = store.activeTimetable
+            await refreshDiagnosticsAfterRescheduling(timetable: timetable)
+            guard timetable == store.activeTimetable, !Task.isCancelled else { return }
+            await LiveActivityCoordinator.refresh(timetable: timetable)
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await refreshDiagnostics() } }
+            if phase == .active {
+                let timetable = store.activeTimetable
+                Task { await refreshDiagnosticsAfterRescheduling(timetable: timetable) }
+            }
         }
         .onChange(of: remindersEnabled) { _, enabled in
             updateReminderState(enabled)
@@ -175,6 +180,14 @@ struct ReminderSettingsView: View {
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "yyyy/MM/dd HH:mm"
         return formatter.string(from: date)
+    }
+
+    @MainActor
+    private func refreshDiagnosticsAfterRescheduling(timetable: Timetable) async {
+        guard timetable == store.activeTimetable, !Task.isCancelled else { return }
+        await scheduler.reschedule(timetable: timetable)
+        guard timetable == store.activeTimetable, !Task.isCancelled else { return }
+        await refreshDiagnostics()
     }
 
     @MainActor

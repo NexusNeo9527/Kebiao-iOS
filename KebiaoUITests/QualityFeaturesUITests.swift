@@ -49,7 +49,8 @@ final class QualityFeaturesUITests: XCTestCase {
         let expand = app.buttons["import-expand-" + prefix + "203"]
         reveal(expand, in: previewScroll, app: app)
         XCTAssertTrue(expand.isHittable)
-        expand.tap()
+        expand.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertEqual(expand.label, "收起日期安排", "Expansion must take effect before looking for the fourth date")
         let lastEvent = app.staticTexts["import-event-" + prefix + "304"]
         reveal(lastEvent, in: previewScroll, app: app)
         XCTAssertTrue(lastEvent.exists)
@@ -110,21 +111,52 @@ final class QualityFeaturesUITests: XCTestCase {
     // Check its rendered position before sending a tap or taking an acceptance screenshot.
     private func reveal(_ element: XCUIElement, in scroll: XCUIElement, app: XCUIApplication, upward: Bool = true) {
         for _ in 0..<24 {
-            if element.exists {
-                let viewport = scroll.frame
-                let navigationBottom = app.navigationBars.firstMatch.frame.maxY
-                var bottom = min(viewport.maxY, app.frame.maxY - 30)
-                let importFooter = app.buttons["合并导入"]
-                if importFooter.exists { bottom = min(bottom, importFooter.frame.minY - 12) }
-                let tabs = app.tabBars.firstMatch
-                if tabs.exists && tabs.frame.minY > app.frame.midY { bottom = min(bottom, tabs.frame.minY - 12) }
-                let frame = element.frame
-                if frame.minY >= max(viewport.minY, navigationBottom) + 4 && frame.maxY <= bottom - 4 { return }
+            let viewport = visibleViewport(in: scroll, app: app)
+            guard viewport.width > 0, viewport.height > 48 else {
+                XCTFail("Scroll view must have an available visible viewport: \(scroll)")
+                return
             }
-            if upward { scroll.swipeUp(velocity: .slow) }
-            else { scroll.swipeDown(velocity: .slow) }
+            var dragUp = upward
+            var distance = min(CGFloat(160), viewport.height * 0.3)
+            if element.exists, !element.frame.isEmpty {
+                let frame = element.frame
+                if frame.minY >= viewport.minY + 4 && frame.maxY <= viewport.maxY - 4 { return }
+                if frame.minY < viewport.minY + 4 {
+                    dragUp = false
+                    distance = min(distance, max(24, viewport.minY + 12 - frame.minY))
+                } else if frame.maxY > viewport.maxY - 4 {
+                    dragUp = true
+                    distance = min(distance, max(24, frame.maxY - viewport.maxY + 12))
+                }
+            }
+            dragViewport(in: scroll, viewport: viewport, upward: dragUp, distance: distance)
         }
         XCTFail("Element must be visible within the scroll viewport: \(element)")
+    }
+
+    private func visibleViewport(in scroll: XCUIElement, app: XCUIApplication) -> CGRect {
+        let viewport = scroll.frame.intersection(app.frame)
+        let navigationBottom = app.navigationBars.firstMatch.frame.maxY
+        let top = max(viewport.minY, navigationBottom) + 4
+        var bottom = min(viewport.maxY, app.frame.maxY - 30)
+        let importFooter = app.buttons["合并导入"]
+        if importFooter.exists { bottom = min(bottom, importFooter.frame.minY - 12) }
+        let tabs = app.tabBars.firstMatch
+        if tabs.exists && tabs.frame.minY > app.frame.midY { bottom = min(bottom, tabs.frame.minY - 12) }
+        return CGRect(x: viewport.minX, y: top, width: viewport.width, height: max(0, bottom - top))
+    }
+
+    private func dragViewport(in scroll: XCUIElement, viewport: CGRect, upward: Bool, distance: CGFloat) {
+        let frame = scroll.frame
+        let delta = upward ? distance : -distance
+        let start = scroll.coordinate(withNormalizedOffset: CGVector(
+            dx: (viewport.midX - frame.minX) / frame.width,
+            dy: (viewport.midY + delta / 2 - frame.minY) / frame.height))
+        let end = scroll.coordinate(withNormalizedOffset: CGVector(
+            dx: (viewport.midX - frame.minX) / frame.width,
+            dy: (viewport.midY - delta / 2 - frame.minY) / frame.height))
+        // Keep both points inside the unobscured viewport, then hold to avoid a long inertial fling.
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.15)
     }
 
     private func capture(_ name: String) {
