@@ -12,7 +12,7 @@ jobs:
   build:
     name: Build iOS app and widget
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       # Xcode 16.4 is the macOS 15 image default and has the installed iOS 18.5
       # simulator device set. Newer Xcode SDKs can exist without an attached
@@ -87,6 +87,7 @@ jobs:
             xcodebuild -project Kebiao.xcodeproj -scheme Kebiao -sdk iphonesimulator \
               -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath build/DerivedData \
               -resultBundlePath "build/Core-$LABEL.xcresult" -only-testing:KebiaoUITests/CoreFeaturesUITests \
+              -only-testing:KebiaoUITests/QualityFeaturesUITests \
               CODE_SIGNING_ALLOWED=NO test || TEST_STATUS=$?
             xcrun xcresulttool export attachments --path "build/Core-$LABEL.xcresult" --output-path "build/visual-qa/$LABEL"
             xcrun simctl shutdown "$DEVICE_ID"
@@ -213,6 +214,10 @@ jobs:
               widget = plistlib.loads(archive.read('Payload/Kebiao.app/PlugIns/KebiaoWidgetExtension.appex/Info.plist'))
               assert app['CFBundleShortVersionString'] == widget['CFBundleShortVersionString'] == version
               assert app['CFBundleVersion'] == widget['CFBundleVersion']
+              assert version == '1.4.1' and app['CFBundleVersion'] == '17'
+              assert archive.testzip() is None
+              assert widget['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.widgetkit-extension'
+              assert app['NSSupportsLiveActivities'] is True
               assert widget['CFBundleIdentifier'].startswith(app['CFBundleIdentifier'] + '.')
           with open(path, 'rb') as source:
               digest = hashlib.sha256(source.read()).hexdigest()

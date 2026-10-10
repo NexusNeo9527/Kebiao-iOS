@@ -20,8 +20,10 @@ grep -Fq 'StaticConfiguration(kind: kind, provider: TodayProvider())' "$widget_f
   || fail "the schedule widget has no static WidgetKit configuration"
 grep -Fq '.supportedFamilies([.systemSmall, .systemMedium])' "$widget_file" \
   || fail "the schedule widget does not register its Home Screen sizes"
-grep -Fq 'UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier)' "$widget_file" \
-  || fail "the widget does not read the shared course store"
+grep -Fq 'SharedTimetableReader' "$widget_file" \
+  || fail "the widget does not use the shared timetable reader"
+grep -Fq 'UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier)' Kebiao/SharedTimetableReader.swift \
+  || fail "the shared reader does not read the App Group store"
 grep -Fq 'UserDefaults(suiteName: KebiaoConfiguration.appGroupIdentifier)' "$store_file" \
   || fail "the app does not write courses to the shared store"
 grep -Fq 'WidgetCenter.shared.reloadAllTimelines()' "$store_file" \
@@ -36,6 +38,13 @@ widget_sources=$(grep -F 'A30000000000000000000006 /* Sources */' "$project_file
   || fail "the extension target is missing the shared course model"
 [[ "$widget_sources" == *'A10000000000000000000011 /* ScheduleEngine.swift in Sources */'* ]] \
   || fail "the extension target is missing active-week schedule rules"
+for shared_source in SharedTimetableReader.swift TodayWidgetContent.swift; do
+  [[ "$widget_sources" == *"$shared_source in Sources"* ]] \
+    || fail "the extension target is missing $shared_source"
+  app_sources=$(grep -F 'A30000000000000000000002 /* Sources */' "$project_file")
+  [[ "$app_sources" == *"$shared_source in Sources"* ]] \
+    || fail "the app target is missing $shared_source"
+done
 grep -Fq 'CODE_SIGN_ENTITLEMENTS = Kebiao/Kebiao.entitlements' "$project_file" \
   || fail "the app target is missing its App Group entitlements"
 grep -Fq 'CODE_SIGN_ENTITLEMENTS = KebiaoWidget/KebiaoWidget.entitlements' "$project_file" \
