@@ -158,11 +158,21 @@ enum ScheduleEngine {
         let week = academicWeekNumber(for: date, calendar: calendar, semesterStart: timetable.semesterStartDate)
         let weekday = Weekday.from(calendarWeekday: calendar.component(.weekday, from: date))
         guard (1...timetable.weekCount).contains(week), slot.weekdays.contains(weekday), slot.isActive(academicWeek: week),
+              let interval = timeInterval(for: slot, on: date, in: timetable) else { return nil }
+        return projectedOccurrence(course: course, slot: slot, source: .weekly(localDateKey(date, calendar: calendar)),
+                                   start: interval.start, end: interval.end, timetable: timetable)
+    }
+
+    // Resolve the same school periods and explicit overrides for previews and actual occurrences.
+    // The caller chooses a representative recurring date; dated events keep their absolute dates.
+    static func timeInterval(for slot: CourseTimeSlot, on date: Date, in timetable: Timetable) -> DateInterval? {
+        guard slot.datedEvents == nil,
               let first = timetable.sectionPeriods.first(where: { $0.id == slot.startSection }),
               let last = timetable.sectionPeriods.first(where: { $0.id == slot.endSection }) else { return nil }
+        let calendar = timetable.calendar
         let minutes = slot.startTimeMinutes ?? first.startMinutes
         let duration = slot.durationMinutes ?? max(1, last.endMinutes - first.startMinutes)
-        let start = calendar.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: date) ?? date
+        guard let start = calendar.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: date) else { return nil }
         let end: Date
         if slot.startTimeMinutes == nil, slot.durationMinutes == nil {
             if last.endMinutes == 1440 {
@@ -174,8 +184,8 @@ enum ScheduleEngine {
         } else {
             end = calendar.date(byAdding: .minute, value: duration, to: start) ?? start
         }
-        return projectedOccurrence(course: course, slot: slot, source: .weekly(localDateKey(date, calendar: calendar)),
-                                   start: start, end: end, timetable: timetable)
+        guard end > start else { return nil }
+        return DateInterval(start: start, end: end)
     }
     private static func resolvedOccurrence(course: Course, slot: CourseTimeSlot, source: OccurrenceSource,
                                            start: Date, end: Date, timetable: Timetable) -> CourseOccurrence? {

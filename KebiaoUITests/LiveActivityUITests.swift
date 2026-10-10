@@ -8,9 +8,9 @@ final class LiveActivityUITests: XCTestCase {
         app.launch()
 
         let status = app.staticTexts["live-activity-status"]
-        XCTAssertTrue(status.waitForExistence(timeout: 15), "Live Activity status is missing")
         let preview = app.buttons["live-activity-preview"]
-        for _ in 0..<3 where !preview.isHittable { app.swipeUp() }
+        for _ in 0..<16 where !preview.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(status.waitForExistence(timeout: 15), "Live Activity status is missing")
         XCTAssertTrue(preview.isHittable, "Preview action is unavailable")
         preview.tap()
         let activated = NSPredicate(format: "label CONTAINS %@", "预览实时活动已激活")

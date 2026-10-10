@@ -4,7 +4,7 @@ struct AppView: View {
     let store: TimetableStore
     @State private var selectedTab: AppTab = {
         let arguments = ProcessInfo.processInfo.arguments
-        if arguments.contains("--ui-test-live-activity") { return .reminders }
+        if arguments.contains("--ui-test-live-activity") || arguments.contains("--ui-test-quality-reminders") { return .reminders }
         if arguments.contains("--ui-test-core") { return .schedule }
         if arguments.contains("--ui-test-overlap") { return .schedule }
         return arguments.contains("--ui-test-add-course") || arguments.contains(where: { $0.hasPrefix("--ui-test-import") }) ? .courses : .day
@@ -15,6 +15,18 @@ struct AppView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-widget-host") {
+            WidgetDiagnosticsHost()
+        } else {
+            applicationContent
+        }
+        #else
+        applicationContent
+        #endif
+    }
+
+    private var applicationContent: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
                 DayScheduleView(store: store)

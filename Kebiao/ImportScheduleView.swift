@@ -80,7 +80,11 @@ struct ImportScheduleView: View {
             .task {
                 #if targetEnvironment(simulator)
                 let arguments = ProcessInfo.processInfo.arguments
-                if arguments.contains("--ui-test-import-preview") || arguments.contains("--ui-test-import-complete") {
+                if arguments.contains("--ui-test-import-details") {
+                    guard preview == nil, completedImport == nil else { return }
+                    preview = Self.detailsTestPreview(in: targetTimetable)
+                    previewStyle = .list
+                } else if arguments.contains("--ui-test-import-preview") || arguments.contains("--ui-test-import-complete") {
                     guard preview == nil, completedImport == nil else { return }
                     preview = ScheduleImportPreview(sourceName: "示例课表.pdf", format: .pdf,
                                                      courses: Course.samples, warnings: [])
@@ -390,32 +394,44 @@ struct ImportScheduleView: View {
     }
 
     private func previewCourseList(_ preview: ScheduleImportPreview) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        LazyVStack(alignment: .leading, spacing: 12) {
             ForEach(preview.courses) { course in
-                HStack(spacing: 10) {
-                    Circle().fill(course.color).frame(width: 10, height: 10)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(course.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Text("\(course.weekdays.sorted { $0.weekIndex < $1.weekIndex }.map(\.shortName).joined(separator: "、")) · 第\(course.startSection)–\(course.endSection)节")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if preview.format == .pdf {
-                            Text(course.notes?.replacingOccurrences(of: "原始周次：", with: "周次：") ?? "周次待核对")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    Spacer()
-                    Button("校正") { presentedSheet = .correction(course) }
-                        .font(.caption).buttonStyle(.bordered)
-                        .accessibilityLabel("校正\(course.name)的星期、节次和周次")
+                ImportPreviewCourseCard(course: course, timetable: targetTimetable, isPDF: preview.format == .pdf) {
+                    presentedSheet = .correction(course)
                 }
-                if course.id != preview.courses.last?.id { Divider() }
             }
-
         }
     }
+
+    #if targetEnvironment(simulator)
+    private static func detailsTestPreview(in timetable: Timetable) -> ScheduleImportPreview {
+        let first = CourseTimeSlot(id: UUID(uuidString: "14100000-0000-0000-0000-000000000201")!,
+            teacher: "王老师", location: "教学楼 A301", startSection: 4, sectionCount: 2,
+            weekdays: [.monday, .friday], startWeek: 1, endWeek: 20,
+            activeWeeks: [1, 2, 3, 5, 7, 8, 9, 11, 13, 14, 15, 17, 19, 20])
+        let second = CourseTimeSlot(id: UUID(uuidString: "14100000-0000-0000-0000-000000000202")!,
+            teacher: "李老师", location: "实验楼 B202", startSection: 7, weekdays: [.tuesday],
+            startTimeMinutes: 23 * 60 + 30, startWeek: 2, endWeek: 6, activeWeeks: [2, 4, 6], durationMinutes: 120)
+        let weekly = Course(id: UUID(uuidString: "14100000-0000-0000-0000-000000000101")!,
+            name: "数据结构与算法设计（实验、讨论与跨专业综合实践）", colorValue: 0x5477D9,
+            notes: "原始周次：1-3、5、7-9、11、13-15、17、19-20周；双周实验", timeSlots: [first, second])
+        let calendar = timetable.calendar
+        func date(_ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 9, day: day, hour: hour, minute: minute))!
+        }
+        let events = [
+            DatedCourseEvent(id: UUID(uuidString: "14100000-0000-0000-0000-000000000301")!, startDate: date(14, 9), endDate: date(14, 10)),
+            DatedCourseEvent(id: UUID(uuidString: "14100000-0000-0000-0000-000000000302")!, startDate: date(14, 15), endDate: date(14, 16)),
+            DatedCourseEvent(id: UUID(uuidString: "14100000-0000-0000-0000-000000000303")!, startDate: date(14, 23, 30), endDate: date(15, 1, 30)),
+            DatedCourseEvent(id: UUID(uuidString: "14100000-0000-0000-0000-000000000304")!, startDate: date(15, 15), endDate: date(15, 16))
+        ]
+        let dated = Course(id: UUID(uuidString: "14100000-0000-0000-0000-000000000102")!,
+            name: "研讨与补课", colorValue: 0x3F9D80,
+            timeSlots: [CourseTimeSlot(id: UUID(uuidString: "14100000-0000-0000-0000-000000000203")!,
+                teacher: "赵老师", location: "综合楼 C303", datedEvents: events)])
+        return ScheduleImportPreview(sourceName: "多时段校正示例.pdf", format: .pdf, courses: [weekly, dated], warnings: [])
+    }
+    #endif
 
     private func importActions(_ preview: ScheduleImportPreview) -> some View {
         HStack(spacing: 10) {
@@ -542,7 +558,7 @@ private struct ImportCourseCorrectionView: View {
                 VStack(spacing: 18) {
                     KebiaoCard {
                         VStack(alignment: .leading, spacing: 12) {
-                            TextField("课程名称", text: $draft.name)
+                            TextField("课程名称", text: $draft.name).accessibilityIdentifier("import-correction-name")
                             Text("对照原课表校正星期、节次和周次。此处保存只更新预览，确认导入后才写入课表。")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -553,14 +569,18 @@ private struct ImportCourseCorrectionView: View {
                         }, set: { value in
                             if let index = draft.timeSlots.firstIndex(where: { $0.id == slot.id }) { draft.timeSlots[index] = value }
                         }), number: index + 1, timetable: timetable)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("import-correction-slot-\(slot.id.uuidString)")
                     }
                 }.padding(18)
-            }.background(KebiaoTheme.background.ignoresSafeArea())
+            }.accessibilityIdentifier("import-correction-scroll")
+                .background(KebiaoTheme.background.ignoresSafeArea())
                 .navigationTitle("校正导入课程").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.accessibilityIdentifier("import-correction-cancel") }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("保存") { onSave(draft); dismiss() }.disabled(!CourseScheduleText.isValid(draft))
+                            .accessibilityIdentifier("import-correction-save")
                     }
                 }
         }

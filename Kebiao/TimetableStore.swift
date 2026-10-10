@@ -51,7 +51,12 @@ final class TimetableStore {
             return
         }
         #endif
-        if let data = defaults.data(forKey: KebiaoConfiguration.collectionStorageKey) {
+        if let stored = defaults.object(forKey: KebiaoConfiguration.collectionStorageKey) {
+            guard let data = stored as? Data else {
+                retainedSourceData = try? PropertyListSerialization.data(fromPropertyList: stored, format: .binary, options: 0)
+                suspendEditing("课表数据类型无效", error: TimetableValidationError.invalid("已存在的多课表资料不会回退到旧数据。"))
+                return
+            }
             retainedSourceData = data
             do {
                 let saved = try JSONDecoder().decode(TimetableCollection.self, from: data)
@@ -61,8 +66,13 @@ final class TimetableStore {
             return
         }
         let legacyDefaults = suppliedDefaults == nil ? UserDefaults.standard : defaults
-        let legacyData = defaults.data(forKey: KebiaoConfiguration.storageKey) ?? legacyDefaults.data(forKey: KebiaoConfiguration.storageKey)
-        if let legacyData {
+        let legacyStored = defaults.object(forKey: KebiaoConfiguration.storageKey) ?? legacyDefaults.object(forKey: KebiaoConfiguration.storageKey)
+        if let legacyStored {
+            guard let legacyData = legacyStored as? Data else {
+                retainedSourceData = try? PropertyListSerialization.data(fromPropertyList: legacyStored, format: .binary, options: 0)
+                suspendEditing("旧课表数据类型无效", error: TimetableValidationError.invalid("原始资料不会被示例课表覆盖。"))
+                return
+            }
             retainedSourceData = legacyData
             do {
                 var migrated = first
@@ -73,15 +83,19 @@ final class TimetableStore {
                 expandWeeks(in: &migrated)
                 let replacement = TimetableCollection(timetables: [migrated], activeTimetableID: migrated.id)
                 try replacement.validate()
-                defaults.set(try JSONEncoder().encode(replacement), forKey: KebiaoConfiguration.collectionStorageKey)
+                try SharedTimetablePersistence.write(JSONEncoder().encode(replacement), to: defaults)
                 collection = replacement
+                if performsSystemUpdates { WidgetCenter.shared.reloadAllTimelines() }
                 // Both legacy keys remain intact; writing v2 is the final migration step.
             } catch { suspendEditing("旧课表迁移失败", error: error) }
         } else {
             var seeded = first
             seeded.courses = Course.samples
             collection = TimetableCollection(timetables: [seeded], activeTimetableID: seeded.id)
-            do { defaults.set(try JSONEncoder().encode(collection), forKey: KebiaoConfiguration.collectionStorageKey) }
+            do {
+                try SharedTimetablePersistence.write(JSONEncoder().encode(collection), to: defaults)
+                if performsSystemUpdates { WidgetCenter.shared.reloadAllTimelines() }
+            }
             catch { errorMessage = error.localizedDescription }
         }
     }
@@ -178,7 +192,8 @@ final class TimetableStore {
     }
 
     var originalData: Data? {
-        defaults.data(forKey: KebiaoConfiguration.collectionStorageKey) ?? defaults.data(forKey: KebiaoConfiguration.storageKey) ?? retainedSourceData
+        (defaults.object(forKey: KebiaoConfiguration.collectionStorageKey) as? Data)
+            ?? retainedSourceData ?? (defaults.object(forKey: KebiaoConfiguration.storageKey) as? Data)
     }
     var hasRecoverySnapshot: Bool { defaults.data(forKey: KebiaoConfiguration.recoverySnapshotKey) != nil }
     @discardableResult func restoreBackup(_ backup: TimetableCollection, replaceAll: Bool) -> Bool {
@@ -212,7 +227,7 @@ final class TimetableStore {
         do {
             try replacement.validate()
             let data = try encoded ?? JSONEncoder().encode(replacement)
-            defaults.set(data, forKey: KebiaoConfiguration.collectionStorageKey)
+            try SharedTimetablePersistence.write(data, to: defaults)
             collection = replacement; errorMessage = nil; revision += 1
             let currentRevision = revision
             let snapshot = activeTimetable

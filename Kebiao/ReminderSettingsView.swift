@@ -4,11 +4,25 @@ import UIKit
 
 struct ReminderSettingsView: View {
     let store: TimetableStore
+    let scheduler: ReminderScheduler
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(ReminderPreferences.enabledKey) private var remindersEnabled = false
     @AppStorage(LiveActivityPreferences.enabledKey) private var liveActivitiesEnabled = true
     @State private var statusMessage: String?
     @State private var isRequesting = false
     @State private var isStartingActivity = false
+    @State private var diagnostics: ReminderDiagnostics?
+    @State private var diagnosticsMessage: String?
+    @State private var diagnosticQuery = 0
+    @State private var operationRevision = 0
+    @State private var requestRevision = 0
+    @State private var rescheduleRevision = 0
+    @State private var isRescheduling = false
+
+    init(store: TimetableStore, scheduler: ReminderScheduler = .shared) {
+        self.store = store
+        self.scheduler = scheduler
+    }
 
     var body: some View {
         let activityStatus = LiveActivityCoordinator.status
@@ -28,6 +42,9 @@ struct ReminderSettingsView: View {
             } footer: {
                 Text("按实际周次预排最近 60 次通知，每次打开 App 会补排。通知和下方实时活动可以分别开启。")
             }
+
+            reminderDiagnosticsSection
+            WidgetSyncDiagnosticsView(store: store)
 
             Section {
                 Toggle("自动显示课程实时活动", isOn: $liveActivitiesEnabled)
@@ -86,8 +103,14 @@ struct ReminderSettingsView: View {
             }
         }
         .navigationTitle("上课提醒")
-        .task {
+        .task(id: store.activeTimetable) {
+            diagnostics = nil
+            statusMessage = nil
+            await refreshDiagnostics()
             await LiveActivityCoordinator.refresh(timetable: store.activeTimetable)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await refreshDiagnostics() } }
         }
         .onChange(of: remindersEnabled) { _, enabled in
             updateReminderState(enabled)
@@ -100,19 +123,118 @@ struct ReminderSettingsView: View {
         }
     }
 
+    private var reminderDiagnosticsSection: some View {
+        Section {
+            if let diagnostics, diagnostics.timetableID == store.activeTimetableID {
+                LabeledContent("App 通知开关", value: diagnostics.appEnabled ? "已开启" : "已关闭")
+                LabeledContent("通知系统权限", value: diagnostics.settings.authorization.description)
+                    .accessibilityIdentifier("reminder-permission")
+                LabeledContent("横幅", value: diagnostics.settings.alerts.description)
+                LabeledContent("声音", value: diagnostics.settings.sound.description)
+                LabeledContent("当前课表已排程", value: "\(diagnostics.scheduledCount) 条")
+                    .accessibilityIdentifier("reminder-pending-count")
+                LabeledContent("下一次提醒", value: nextReminderDescription(diagnostics.nextReminderDate))
+                    .accessibilityIdentifier("reminder-next-date")
+                if diagnostics.otherTimetableCount > 0 {
+                    Text("发现 \(diagnostics.otherTimetableCount) 条其他课表或旧格式提醒，重新排程可清理。")
+                        .font(.footnote).foregroundStyle(.orange)
+                        .accessibilityIdentifier("reminder-other-count")
+                }
+                if let failure = diagnostics.recentFailure {
+                    Text("最近排程：\(failure.attemptedCount - failure.failedCount) 条成功，\(failure.failedCount) 条失败。\(failure.message)")
+                        .font(.footnote).foregroundStyle(.red)
+                        .accessibilityIdentifier("reminder-last-failure")
+                } else {
+                    Text("最近排程未记录失败。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            } else {
+                Text(diagnosticsMessage ?? "正在读取系统提醒状态…").foregroundStyle(.secondary)
+            }
+            Button("检查提醒状态") { Task { await refreshDiagnostics() } }
+                .accessibilityIdentifier("reminder-check")
+            Button("重新排程") { rescheduleReminders() }
+                .disabled(!remindersEnabled || isRequesting || isRescheduling)
+                .accessibilityIdentifier("reminder-reschedule")
+            Link("打开通知系统设置", destination: URL(string: UIApplication.openSettingsURLString)!)
+                .accessibilityIdentifier("reminder-open-settings")
+        } header: {
+            Text("通知诊断")
+        } footer: {
+            Text("数量和下一次提醒来自系统待投递队列。系统权限、横幅、声音分别控制通知效果；已排程并不代表已送达。重新排程不会申请权限。")
+        }
+        .accessibilityIdentifier("reminder-diagnostics")
+    }
+
+    private func nextReminderDescription(_ date: Date?) -> String {
+        guard let date else { return "暂无待投递提醒" }
+        let formatter = DateFormatter()
+        formatter.calendar = store.activeTimetable.calendar
+        formatter.timeZone = store.activeTimetable.calendar.timeZone
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy/MM/dd HH:mm"
+        return formatter.string(from: date)
+    }
+
+    @MainActor
+    private func refreshDiagnostics() async {
+        diagnosticQuery += 1
+        let query = diagnosticQuery
+        let timetable = store.activeTimetable
+        diagnosticsMessage = nil
+        for _ in 0..<3 {
+            let value = await scheduler.diagnostics(timetable: timetable)
+            guard query == diagnosticQuery, timetable == store.activeTimetable, !Task.isCancelled else { return }
+            if let value {
+                diagnostics = value
+                return
+            }
+            await Task.yield()
+        }
+        diagnosticsMessage = store.isReadOnly
+            ? "课表数据暂时无法读取，无法检查对应提醒。请先恢复有效课表。"
+            : "课表或排程正在更新，暂时无法完成检查。请稍后检查提醒状态。"
+    }
+
+    private func rescheduleReminders() {
+        let timetable = store.activeTimetable
+        operationRevision += 1
+        let revision = operationRevision
+        rescheduleRevision += 1
+        let busyRevision = rescheduleRevision
+        isRescheduling = true
+        Task {
+            defer { if busyRevision == rescheduleRevision { isRescheduling = false } }
+            await scheduler.reschedule(timetable: timetable)
+            guard revision == operationRevision else { return }
+            guard timetable == store.activeTimetable else { return }
+            await refreshDiagnostics()
+            guard revision == operationRevision, timetable == store.activeTimetable else { return }
+            statusMessage = "已检查系统权限并重排允许的通知；请查看通知诊断中的实际队列。"
+        }
+    }
+
     private func updateReminderState(_ enabled: Bool) {
+        operationRevision += 1
+        let revision = operationRevision
+        requestRevision += 1
+        let busyRevision = requestRevision
+        let timetable = store.activeTimetable
         isRequesting = true
         Task {
+            defer { if busyRevision == requestRevision { isRequesting = false } }
             if enabled {
-                let timetable = store.activeTimetable
-                let granted = await ReminderScheduler.shared.requestAuthorizationAndReschedule(timetable: timetable)
+                let granted = await scheduler.requestAuthorizationAndReschedule(timetable: timetable)
+                guard revision == operationRevision else { return }
+                guard timetable == store.activeTimetable else { return }
                 remindersEnabled = granted
-                statusMessage = granted ? "上课通知已开启。" : "通知权限未开启，请到系统设置中允许通知。"
+                statusMessage = granted ? "通知权限已允许，请查看实际排程结果。" : "通知权限未开启，请到系统设置中允许通知。"
             } else {
-                await ReminderScheduler.shared.disable()
+                await scheduler.disable()
+                guard revision == operationRevision else { return }
                 statusMessage = "上课通知已关闭。"
             }
-            isRequesting = false
+            await refreshDiagnostics()
         }
     }
 
