@@ -50,6 +50,7 @@ struct ImportScheduleView: View {
                     .padding(18)
                     .padding(.bottom, 30)
                 }
+                .accessibilityIdentifier("import-preview-scroll")
                 .disabled(isParsingFile)
                 .onChange(of: preview?.courses) { _, courses in
                     if courses != nil { scrollProxy.scrollTo("import-result", anchor: .top) }

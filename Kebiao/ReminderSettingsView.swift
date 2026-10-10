@@ -161,10 +161,10 @@ struct ReminderSettingsView: View {
                 .accessibilityIdentifier("reminder-open-settings")
         } header: {
             Text("通知诊断")
+                .accessibilityIdentifier("reminder-diagnostics")
         } footer: {
             Text("数量和下一次提醒来自系统待投递队列。系统权限、横幅、声音分别控制通知效果；已排程并不代表已送达。重新排程不会申请权限。")
         }
-        .accessibilityIdentifier("reminder-diagnostics")
     }
 
     private func nextReminderDescription(_ date: Date?, scheduledCount: Int) -> String {
