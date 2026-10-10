@@ -40,9 +40,12 @@ final class QualityFeaturesUITests: XCTestCase {
         let courseID = prefix + "101"
         let courseName = "数据结构与算法设计（实验、讨论与跨专业综合实践）"
         let previewScroll = app.scrollViews["import-preview-scroll"]
+        let firstWeeks = app.staticTexts["import-slot-weeks-" + prefix + "201"]
+        let originalFirstWeeks = "第 1–3、5、7–9、11、13–15、17、19–20 周"
         let secondWeeks = app.staticTexts["import-slot-weeks-" + prefix + "202"]
         XCTAssertTrue(app.buttons["import-correct-" + courseID].waitForExistence(timeout: 15))
         reveal(secondWeeks, in: previewScroll, app: app)
+        XCTAssertEqual(firstWeeks.label, originalFirstWeeks)
         XCTAssertEqual(secondWeeks.label, "第 2、4、6 周")
         XCTAssertEqual(app.staticTexts["import-slot-time-" + prefix + "202"].label, "23:30–次日 01:30")
         capture("quality-import-all-slots")
@@ -76,6 +79,7 @@ final class QualityFeaturesUITests: XCTestCase {
         capture("quality-import-second-slot-correction")
         app.buttons["import-correction-save"].tap()
         reveal(secondWeeks, in: previewScroll, app: app)
+        XCTAssertEqual(firstWeeks.label, originalFirstWeeks, "Correcting the second slot must preserve the first slot's exact weeks")
         XCTAssertEqual(secondWeeks.label, "第 2–6 周")
         XCTAssertTrue(app.staticTexts["import-pdf-source-" + courseID].exists)
         capture("quality-import-corrected-preview")
@@ -117,16 +121,17 @@ final class QualityFeaturesUITests: XCTestCase {
                 return
             }
             var dragUp = upward
-            var distance = min(CGFloat(160), viewport.height * 0.3)
+            let minimumDistance = min(CGFloat(100), viewport.height * 0.6)
+            var distance = max(minimumDistance, min(CGFloat(160), viewport.height * 0.4))
             if element.exists, !element.frame.isEmpty {
                 let frame = element.frame
                 if frame.minY >= viewport.minY + 4 && frame.maxY <= viewport.maxY - 4 { return }
                 if frame.minY < viewport.minY + 4 {
                     dragUp = false
-                    distance = min(distance, max(24, viewport.minY + 12 - frame.minY))
+                    distance = min(distance, max(minimumDistance, viewport.minY + 12 - frame.minY))
                 } else if frame.maxY > viewport.maxY - 4 {
                     dragUp = true
-                    distance = min(distance, max(24, frame.maxY - viewport.maxY + 12))
+                    distance = min(distance, max(minimumDistance, frame.maxY - viewport.maxY + 12))
                 }
             }
             dragViewport(in: scroll, viewport: viewport, upward: dragUp, distance: distance)
@@ -149,14 +154,16 @@ final class QualityFeaturesUITests: XCTestCase {
     private func dragViewport(in scroll: XCUIElement, viewport: CGRect, upward: Bool, distance: CGFloat) {
         let frame = scroll.frame
         let delta = upward ? distance : -distance
+        // The card gutter avoids pressing a week-selection or action button before dragging.
+        let gutterX = viewport.minX + 12
         let start = scroll.coordinate(withNormalizedOffset: CGVector(
-            dx: (viewport.midX - frame.minX) / frame.width,
+            dx: (gutterX - frame.minX) / frame.width,
             dy: (viewport.midY + delta / 2 - frame.minY) / frame.height))
         let end = scroll.coordinate(withNormalizedOffset: CGVector(
-            dx: (viewport.midX - frame.minX) / frame.width,
+            dx: (gutterX - frame.minX) / frame.width,
             dy: (viewport.midY - delta / 2 - frame.minY) / frame.height))
-        // Keep both points inside the unobscured viewport, then hold to avoid a long inertial fling.
-        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.15)
+        // Tiny drags can rebound without scrolling; hold at the end to prevent an inertial fling.
+        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.15)
     }
 
     private func capture(_ name: String) {
