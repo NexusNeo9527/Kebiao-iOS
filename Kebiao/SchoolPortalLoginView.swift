@@ -15,40 +15,66 @@ struct SchoolPortalLoginView: View {
     @State private var dialogInput = ""
 
     var body: some View {
-        let presentedDialogID = session.javaScriptDialog?.id
-        return NavigationStack {
-            VStack(spacing: 8) {
-                HStack {
-                    TextField("学校网页地址", text: $address)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                        .onSubmit { openAddress() }
-                    Button("前往") { openAddress() }.disabled(session.isLoading || session.isResetting)
-                    Button { session.activeWebView.reload() } label: { Image(systemName: "arrow.clockwise") }
-                        .disabled(session.isLoading || session.isResetting)
-                        .accessibilityLabel("刷新网页")
-                }
-                .padding(.horizontal)
-                Text(session.loginIssue ?? "登录后进入教务系统，选择学期并打开完整课表，再点下方读取。")
-                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal)
-                if session.windows.count > 1 {
-                    HStack {
-                        Text("学校新窗口 · \(session.windows.count - 1)").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("关闭新窗口，返回上一页") { session.closeActiveWindow() }
-                            .font(.caption)
-                            .accessibilityIdentifier("portal-close-window")
-                    }.padding(.horizontal)
-                }
-                ZStack {
-                    PortalWebView(webView: session.activeWebView)
-                        .ignoresSafeArea(edges: .bottom)
-                    if session.isLoading || session.isResetting {
-                        ProgressView(session.isResetting ? "正在清除此学校的登录状态…" : "正在打开教务系统…")
-                            .padding(18)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                    }
-                }
+        NavigationStack {
+            browserWithJavaScriptDialog.background { errorAlert }
+        }
+    }
+
+    private var browserContent: some View {
+        VStack(spacing: 8) {
+            addressBar
+            instructions
+            newWindowBar
+            webPage
+        }
+    }
+
+    private var addressBar: some View {
+        HStack {
+            TextField("学校网页地址", text: $address)
+                .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                .onSubmit { openAddress() }
+            Button("前往") { openAddress() }.disabled(session.isLoading || session.isResetting)
+            Button { session.activeWebView.reload() } label: { Image(systemName: "arrow.clockwise") }
+                .disabled(session.isLoading || session.isResetting)
+                .accessibilityLabel("刷新网页")
+        }
+        .padding(.horizontal)
+    }
+
+    private var instructions: some View {
+        Text(session.loginIssue ?? "登录后进入教务系统，选择学期并打开完整课表，再点下方读取。")
+            .font(.caption).foregroundStyle(.secondary).padding(.horizontal)
+    }
+
+    @ViewBuilder private var newWindowBar: some View {
+        if session.windows.count > 1 {
+            HStack {
+                Text("学校新窗口 · \(newWindowCount)").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("关闭新窗口，返回上一页") { session.closeActiveWindow() }
+                    .font(.caption)
+                    .accessibilityIdentifier("portal-close-window")
+            }.padding(.horizontal)
+        }
+    }
+
+    private var newWindowCount: Int { max(0, session.windows.count - 1) }
+
+    private var webPage: some View {
+        ZStack {
+            PortalWebView(webView: session.activeWebView)
+                .ignoresSafeArea(edges: .bottom)
+            if session.isLoading || session.isResetting {
+                ProgressView(session.isResetting ? "正在清除此学校的登录状态…" : "正在打开教务系统…")
+                    .padding(18)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
             }
+        }
+    }
+
+    private var browserWithLifecycle: some View {
+        browserContent
             .onAppear {
                 address = SchoolPortalSession.safeDisplayAddress(for: url)
                 session.start(at: url)
@@ -61,37 +87,45 @@ struct SchoolPortalLoginView: View {
             }
             .navigationTitle(sourceName)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("重新登录") { confirmsReset = true }
-                        .disabled(session.isResetting)
-                        .accessibilityIdentifier("portal-reset-login")
-                }
-                ToolbarItemGroup(placement: .bottomBar) {
-                    Button { session.activeWebView.goBack() } label: { Image(systemName: "chevron.backward") }
-                        .disabled(!session.canGoBack || session.isResetting)
-                        .accessibilityLabel("后退")
-                    Button { session.activeWebView.goForward() } label: { Image(systemName: "chevron.forward") }
-                        .disabled(!session.canGoForward || session.isResetting)
-                        .accessibilityLabel("前进")
-                    Spacer()
-                    Button {
-                        extractCurrentTimetable()
-                    } label: {
-                        if session.isExtracting {
-                            ProgressView()
-                        } else {
-                            Label("读取当前课表", systemImage: "tablecells")
-                        }
-                    }
-                    .fontWeight(.semibold)
-                    .disabled(session.isLoading || session.isExtracting || session.isResetting || session.javaScriptDialog != nil || session.hasBlockingAuthenticationError)
-                    .accessibilityIdentifier("read-current-timetable")
-                }
+            .toolbar { portalToolbar }
+    }
+
+    @ToolbarContentBuilder private var portalToolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button("关闭") { dismiss() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button("重新登录") { confirmsReset = true }
+                .disabled(session.isResetting)
+                .accessibilityIdentifier("portal-reset-login")
+        }
+        ToolbarItemGroup(placement: .bottomBar) {
+            Button { session.activeWebView.goBack() } label: { Image(systemName: "chevron.backward") }
+                .disabled(!session.canGoBack || session.isResetting)
+                .accessibilityLabel("后退")
+            Button { session.activeWebView.goForward() } label: { Image(systemName: "chevron.forward") }
+                .disabled(!session.canGoForward || session.isResetting)
+                .accessibilityLabel("前进")
+            Spacer()
+            readButton
+        }
+    }
+
+    private var readButton: some View {
+        Button { extractCurrentTimetable() } label: {
+            if session.isExtracting {
+                ProgressView()
+            } else {
+                Label("读取当前课表", systemImage: "tablecells")
             }
+        }
+        .fontWeight(.semibold)
+        .disabled(session.isLoading || session.isExtracting || session.isResetting || session.javaScriptDialog != nil || session.hasBlockingAuthenticationError)
+        .accessibilityIdentifier("read-current-timetable")
+    }
+
+    private var browserWithDialogs: some View {
+        browserWithLifecycle
             .confirmationDialog("课表位于独立页面，请选择入口", isPresented: Binding(
                 get: { !frameURLs.isEmpty }, set: { if !$0 { frameURLs = [] } }
             ), titleVisibility: .visible) {
@@ -111,6 +145,11 @@ struct SchoolPortalLoginView: View {
             } message: {
                 Text("只清除本次学校入口域及子域的登录数据；可识别的教育域包含该校子域。其他学校登录状态和已有课程会保留。")
             }
+    }
+
+    private var browserWithJavaScriptDialog: some View {
+        let presentedDialogID = session.javaScriptDialog?.id
+        return browserWithDialogs
             .alert(session.javaScriptDialog?.title ?? "学校网页提示", isPresented: Binding(
                 get: { session.javaScriptDialog != nil },
                 set: {
@@ -125,8 +164,10 @@ struct SchoolPortalLoginView: View {
             } message: { dialog in
                 Text(dialog.message)
             }
-            .background {
-                Color.clear.alert("学校网页打开或读取失败", isPresented: Binding(
+    }
+
+    private var errorAlert: some View {
+        Color.clear.alert("学校网页打开或读取失败", isPresented: Binding(
                 get: { session.errorMessage != nil },
                 set: { if !$0 { session.errorMessage = nil } }
             )) {
@@ -134,8 +175,6 @@ struct SchoolPortalLoginView: View {
             } message: {
                 Text(session.errorMessage ?? "请刷新网页或重新登录后重试。")
             }
-            }
-        }
     }
 
     private func openAddress() {
@@ -303,7 +342,7 @@ private struct PortalWebView: UIViewRepresentable {
 
 @MainActor
 final class SchoolPortalSession: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
-    typealias BrowserPreparation = (WKWebView, @escaping (Result<Void, Error>) -> Void) -> Void
+    typealias BrowserPreparation = @MainActor (WKWebView, @escaping (Result<Void, Error>) -> Void) -> Void
 
     struct JavaScriptDialog: Identifiable {
         enum Kind: Equatable { case alert, confirm, prompt }
@@ -347,9 +386,9 @@ final class SchoolPortalSession: NSObject, ObservableObject, WKNavigationDelegat
     private var activeDialogWindow: ObjectIdentifier?
     private var isDismissingDialog = false
 
-    convenience init(websiteDataStore: WKWebsiteDataStore = .default(), maximumWindowCount: Int = 4) {
+    convenience init(websiteDataStore: WKWebsiteDataStore? = nil, maximumWindowCount: Int = 4) {
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = websiteDataStore
+        configuration.websiteDataStore = websiteDataStore ?? .default()
         self.init(configuration: configuration, maximumWindowCount: maximumWindowCount)
     }
 
