@@ -214,7 +214,7 @@ jobs:
               widget = plistlib.loads(archive.read('Payload/Kebiao.app/PlugIns/KebiaoWidgetExtension.appex/Info.plist'))
               assert app['CFBundleShortVersionString'] == widget['CFBundleShortVersionString'] == version
               assert app['CFBundleVersion'] == widget['CFBundleVersion']
-              assert version == '1.4.1' and app['CFBundleVersion'] == '17'
+              assert version == '1.4.2' and app['CFBundleVersion'] == '18'
               assert archive.testzip() is None
               assert widget['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.widgetkit-extension'
               assert app['NSSupportsLiveActivities'] is True

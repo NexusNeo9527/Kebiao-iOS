@@ -81,7 +81,11 @@ struct ImportScheduleView: View {
             .task {
                 #if targetEnvironment(simulator)
                 let arguments = ProcessInfo.processInfo.arguments
-                if arguments.contains("--ui-test-import-details") {
+                if arguments.contains("--ui-test-import-login") {
+                    if presentedSheet == nil {
+                        presentedSheet = .portal(URL(string: "https://portal.fixture/")!)
+                    }
+                } else if arguments.contains("--ui-test-import-details") {
                     guard preview == nil, completedImport == nil else { return }
                     preview = Self.detailsTestPreview(in: targetTimetable)
                     previewStyle = .list
@@ -239,7 +243,7 @@ struct ImportScheduleView: View {
                     .background(KebiaoTheme.background, in: RoundedRectangle(cornerRadius: 12))
                 Button {
                     if let portalURL {
-                        portalAddress = portalURL.absoluteString
+                        portalAddress = SchoolPortalSession.safeDisplayAddress(for: portalURL)
                         presentedSheet = .portal(portalURL)
                     }
                 } label: {
@@ -260,11 +264,18 @@ struct ImportScheduleView: View {
     }
 
     private var portalURL: URL? {
-        let trimmed = portalAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        Self.portalNavigationURL(from: portalAddress)
+    }
+
+    static func portalNavigationURL(from address: String) -> URL? {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let components = URLComponents(string: trimmed),
               components.scheme?.lowercased() == "https",
-              components.host != nil else { return nil }
-        return Self.stablePortalEntry(from: components)
+              let host = components.host, !host.isEmpty,
+              components.user == nil, components.password == nil else { return nil }
+        // An active callback can contain a fresh SSO ticket or a business code.
+        // Sanitize only displayed/saved addresses, never the navigation request.
+        return components.url
     }
 
     private func migrateSavedPortalAddress() {

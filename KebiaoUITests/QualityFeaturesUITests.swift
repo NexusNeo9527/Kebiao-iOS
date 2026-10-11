@@ -9,6 +9,41 @@ final class QualityFeaturesUITests: XCTestCase {
         return app
     }
 
+    func testPortalLoginWindowKeepsIdentityAndShowsDeviceFailure() {
+        let app = launch("--ui-test-import-login")
+        let root = app.webViews.staticTexts["门户首页"]
+        XCTAssertTrue(root.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.webViews.staticTexts["浏览器：Safari"].exists)
+        capture("portal-login-root-identity")
+        app.webViews.buttons["打开教务系统"].tap()
+        let child = app.webViews.staticTexts["教务子页面"]
+        XCTAssertTrue(child.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.webViews.staticTexts["浏览器：Safari · 父窗口：已连接"].exists)
+        capture("portal-login-child-identity")
+        app.webViews.buttons["关闭教务窗口"].tap()
+        XCTAssertTrue(root.waitForExistence(timeout: 10))
+        app.webViews.buttons["测试连续网页确认"].tap()
+        let firstPrompt = app.alerts.staticTexts["网页提示一"]
+        XCTAssertTrue(firstPrompt.waitForExistence(timeout: 5))
+        app.alerts.buttons["确定"].tap()
+        let secondPrompt = app.alerts.staticTexts["是否继续进入教务系统？"]
+        XCTAssertTrue(secondPrompt.waitForExistence(timeout: 10),
+                      "A previous alert dismissal must not discard the next web confirmation")
+        capture("portal-login-dialog-sequence")
+        app.alerts.buttons["确定"].tap()
+        XCTAssertTrue(app.webViews.staticTexts["网页确认已完成"].waitForExistence(timeout: 5))
+        app.webViews.buttons["模拟设备识别异常"].tap()
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.staticTexts["未知设备"].exists)
+        capture("portal-login-device-error")
+        alert.buttons["确定"].tap()
+        XCTAssertFalse(app.buttons["read-current-timetable"].isEnabled,
+                       "A reported device failure must be handled before reading a timetable")
+        XCTAssertTrue(app.buttons["portal-reset-login"].exists)
+        capture("portal-login-retry-guidance")
+    }
+
     func testReminderAndSharedDataDiagnosticsAreReachable() {
         let app = launch("--ui-test-quality-reminders")
         let form = app.collectionViews.firstMatch
