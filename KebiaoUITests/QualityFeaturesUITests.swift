@@ -20,8 +20,18 @@ final class QualityFeaturesUITests: XCTestCase {
         XCTAssertTrue(child.waitForExistence(timeout: 10))
         XCTAssertTrue(app.webViews.staticTexts["浏览器：Safari · 父窗口：已连接"].exists)
         capture("portal-login-child-identity")
-        app.webViews.buttons["关闭教务窗口"].tap()
+        let closeWindow = app.webViews.buttons["关闭教务窗口"]
+        XCTAssertTrue(closeWindow.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(closeWindow.frame.width, 0)
+        XCTAssertGreaterThan(closeWindow.frame.height, 0)
+        XCTAssertTrue(app.frame.contains(CGPoint(x: closeWindow.frame.midX, y: closeWindow.frame.midY)))
+        // WebKit popup accessibility can report {-1, -1} as its hit point even
+        // with a visible button. Send a real touch at the observed button center;
+        // the returned root page proves the click ran the window.close handler.
+        closeWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(root.waitForExistence(timeout: 10))
+        XCTAssertFalse(child.exists)
+        XCTAssertFalse(app.buttons["portal-close-window"].exists)
         app.webViews.buttons["测试连续网页确认"].tap()
         let firstPrompt = app.alerts.staticTexts["网页提示一"]
         XCTAssertTrue(firstPrompt.waitForExistence(timeout: 5))

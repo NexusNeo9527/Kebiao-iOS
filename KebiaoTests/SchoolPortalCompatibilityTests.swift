@@ -287,16 +287,22 @@ final class SchoolPortalCompatibilityTests: XCTestCase {
     }
 
     func testOpeningExternalSchoolDoesNotExpandOriginalSchoolCleanupScope() async {
-        let fixture = PortalSessionFixture { _, _ in }
+        let fixture = PortalSessionFixture()
         defer { fixture.close() }
-        fixture.session.start(at: URL(string: "https://portal.school-a.edu.cn/")!)
-        let cancelled = expectation(description: "Cross-school navigation cancelled before network")
-        let blocker = PortalNavigationBlocker { cancelled.fulfill() }
-        // This scope test does not contact a real school. Only the navigation
-        // delegate is replaced; real popup tests keep the session's UI delegate.
-        fixture.session.rootWebView.navigationDelegate = blocker
-        fixture.session.open(URL(string: "https://portal.school-b.edu.cn/")!)
-        await fulfillment(of: [cancelled], timeout: 10)
+        let initialReady = fixture.messages.expect("parent-ready", in: self)
+        let externalReady = fixture.messages.expect("external-ready", in: self)
+        fixture.pages["/parent"] = Self.parentDocument
+        fixture.pages["/external"] = Self.parentDocument.replacingOccurrences(of: "'parent-ready'", with: "'external-ready'")
+        let initialURL = fixture.url("/parent", host: "portal.school-a.edu.cn")
+        let externalURL = fixture.url("/external", host: "portal.school-b.edu.cn")
+        fixture.session.start(at: initialURL)
+        await fulfillment(of: [initialReady], timeout: 10)
+        XCTAssertTrue(fixture.session.isWebsiteDataRecordRelevant("school-a.edu.cn"))
+
+        fixture.session.open(externalURL)
+        await fulfillment(of: [externalReady], timeout: 10)
+        XCTAssertEqual(fixture.session.rootWebView.url, externalURL)
+        XCTAssertEqual(fixture.requests.map(\.url), [initialURL, externalURL])
         XCTAssertTrue(fixture.session.isWebsiteDataRecordRelevant("school-a.edu.cn"))
         XCTAssertFalse(fixture.session.isWebsiteDataRecordRelevant("school-b.edu.cn"))
         XCTAssertFalse(fixture.session.isWebsiteDataRecordRelevant("school-a.edu.cn.unrelated.example"))
@@ -623,16 +629,4 @@ private final class PortalNavigationObserver: NSObject, WKNavigationDelegate {
     init(finished: @escaping () -> Void) { self.finished = finished }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finished() }
-}
-
-private final class PortalNavigationBlocker: NSObject, WKNavigationDelegate {
-    private let didAttempt: () -> Void
-
-    init(didAttempt: @escaping () -> Void) { self.didAttempt = didAttempt }
-
-    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        decisionHandler(.cancel)
-        didAttempt()
-    }
 }
