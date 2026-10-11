@@ -64,7 +64,6 @@ struct SchoolPortalLoginView: View {
     private var webPage: some View {
         ZStack {
             PortalWebView(webView: session.activeWebView)
-                .ignoresSafeArea(edges: .bottom)
             if session.isLoading || session.isResetting {
                 ProgressView(session.isResetting ? "正在清除此学校的登录状态…" : "正在打开教务系统…")
                     .padding(18)
