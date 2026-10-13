@@ -47,7 +47,10 @@ final class CoreFeaturesUITests: XCTestCase {
         for _ in 0..<8 where !field.isHittable { app.swipeDown() }
         field.tap()
         field.typeText("校正")
-        let editedName = field.value as? String ?? "多时段测试课程校正"
+        // Reading the value right after typing can catch a partially committed CJK string.
+        let editedName = "多时段测试课程校正"
+        let typed = expectation(for: NSPredicate(format: "value == %@", editedName), evaluatedWith: field)
+        wait(for: [typed], timeout: 5)
         app.buttons["保存"].tap()
         let changed = app.staticTexts[editedName]
         XCTAssertTrue(changed.waitForExistence(timeout: 5))
