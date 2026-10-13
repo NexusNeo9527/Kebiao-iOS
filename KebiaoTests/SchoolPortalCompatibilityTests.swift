@@ -96,8 +96,16 @@ final class SchoolPortalCompatibilityTests: XCTestCase {
 
         fixture.session.start(at: fixture.url("/parent"))
         await fulfillment(of: [parentReady], timeout: 10)
-        _ = try await fixture.session.rootWebView.evaluateJavaScript("document.getElementById('ticket-exchange').submit(); true")
-        await fulfillment(of: [childReady], timeout: 10)
+        // parent-ready is posted from <head>; submit only after the parent finishes
+        // loading so the popup navigation does not race the parent document.
+        _ = try await fixture.session.rootWebView.evaluateJavaScript("""
+        (() => {
+          const submitTicket = () => document.getElementById('ticket-exchange').submit();
+          if (document.readyState === 'complete') submitTicket(); else window.addEventListener('load', submitTicket);
+          return true;
+        })()
+        """)
+        await fulfillment(of: [childReady], timeout: 30)
         let child = fixture.session.activeWebView
         // A JavaScript round trip runs after this document's first script, without
         // adding a timed sleep or a second navigation to an SSO ticket endpoint.
